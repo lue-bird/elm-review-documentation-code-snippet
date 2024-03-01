@@ -1,4 +1,17 @@
-module List.LocalExtra exposing (allJustMap, firstJustMap)
+module List.LocalExtra exposing (allJustMap, firstJustMap, setUnionMap)
+
+import Set exposing (Set)
+
+
+setUnionMap : (a -> Set comparable) -> (List a -> Set comparable)
+setUnionMap elementToSet =
+    \list ->
+        list
+            |> List.foldl
+                (\element soFar ->
+                    Set.union soFar (element |> elementToSet)
+                )
+                Set.empty
 
 
 allJustMap : (a -> Maybe b) -> List a -> Maybe (List b)

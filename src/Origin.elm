@@ -2,6 +2,7 @@ module Origin exposing (determine)
 
 import Elm.Syntax.ModuleName
 import FastDict exposing (Dict)
+import FastDict.LocalExtra
 import Imports exposing (Imports)
 import Set
 
@@ -14,23 +15,31 @@ determine imports =
                 qualification
 
             Nothing ->
-                case
-                    imports
-                        |> dictFirstJustMap
-                            (\importModuleName import_ ->
-                                if (import_.alias |> Maybe.map List.singleton) == Just qualification then
-                                    importModuleName |> Just
+                let
+                    maybeOriginByAlias : Maybe Elm.Syntax.ModuleName.ModuleName
+                    maybeOriginByAlias =
+                        imports
+                            |> FastDict.LocalExtra.firstJustMap
+                                (\importModuleName import_ ->
+                                    case import_.alias of
+                                        Nothing ->
+                                            Nothing
 
-                                else
-                                    Nothing
-                            )
-                of
+                                        Just alias ->
+                                            if qualification == [ alias ] then
+                                                importModuleName |> Just
+
+                                            else
+                                                Nothing
+                                )
+                in
+                case maybeOriginByAlias of
                     Just aliasOriginModuleName ->
                         aliasOriginModuleName
 
                     Nothing ->
                         imports
-                            |> dictFirstJustMap
+                            |> FastDict.LocalExtra.firstJustMap
                                 (\importModuleName import_ ->
                                     if import_.exposed |> Set.member unqualifiedName then
                                         importModuleName |> Just
@@ -39,19 +48,3 @@ determine imports =
                                         Nothing
                                 )
                             |> Maybe.withDefault qualification
-
-
-dictFirstJustMap : (key -> value -> Maybe mapped) -> Dict key value -> Maybe mapped
-dictFirstJustMap mapToMaybe =
-    \dict ->
-        dict
-            |> FastDict.foldl
-                (\importModuleName import_ soFar ->
-                    case soFar of
-                        Just alreadyFound ->
-                            alreadyFound |> Just
-
-                        Nothing ->
-                            import_ |> mapToMaybe importModuleName
-                )
-                Nothing

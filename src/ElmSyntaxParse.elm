@@ -12,7 +12,7 @@ importsAndDeclarationsDiscardingModuleHeader : String -> Maybe { imports : List 
 importsAndDeclarationsDiscardingModuleHeader =
     \rawSourceCode ->
         -- inserts and removes a dummy declaration to account for 0 declarations
-        case "a = a\n" ++ rawSourceCode |> Elm.Parser.parseToFile of
+        case rawSourceCode ++ "\na = a" |> Elm.Parser.parseToFile of
             Ok file ->
                 { imports = file.imports |> List.map Elm.Syntax.Node.value
                 , declarations = file.declarations |> List.drop 1 |> List.map Elm.Syntax.Node.value

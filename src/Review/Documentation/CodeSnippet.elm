@@ -12,6 +12,7 @@ module Review.Documentation.CodeSnippet exposing (check)
 
 -}
 
+import Declaration.LocalExtra
 import Dict
 import Elm.CodeGen
 import Elm.Docs
@@ -25,6 +26,7 @@ import Elm.Syntax.ModuleName
 import Elm.Syntax.Node exposing (Node(..))
 import Elm.Syntax.TypeAnnotation
 import ElmSyntaxParse
+import Expression.LocalExtra
 import FastDict exposing (Dict)
 import Imports
 import List.LocalExtra
@@ -35,6 +37,7 @@ import Review.Project.Dependency
 import Review.Rule exposing (ModuleKey, Rule)
 import RoughMarkdown
 import Set exposing (Set)
+import Type.LocalExtra
 
 
 type alias ProjectContext =
@@ -396,15 +399,6 @@ checkFullProject =
                 ]
 
             Just documentationCodeSnippetTestModuleKey ->
-                {- TODO
-                   - #location is (readme | (moduleName\_\_(header | reference name))) \_\_(code snippet index 0 based)
-                   - prefix type and type alias declarations in the examples based on #location
-                     Keep sure to update expected and actual expressions for tests
-                   - map all sub references (type, pattern, value/function) of declarations and actual and expected
-                       - to fully qualified using Origin.determine
-                       - if no full qualification is found, see if it's defined in `declarations` and adapt the #location name accordingly
-
-                -}
                 [ Review.Rule.errorForModuleWithFix documentationCodeSnippetTestModuleKey
                     { message = "documentation code snippet test can be added"
                     , details =
@@ -415,59 +409,162 @@ checkFullProject =
                     [ Review.Fix.replaceRangeBy
                         -- everything
                         { start = { row = 1, column = 1 }, end = { row = 1000000, column = 1 } }
-                        (Elm.CodeGen.file
-                            (Elm.CodeGen.normalModule [ "DocumentationCodeSnippet.Test" ] [ Elm.CodeGen.funExpose "tests" ])
-                            [ Elm.CodeGen.importStmt [ "Test" ] Nothing Nothing
-                            , Elm.CodeGen.importStmt [ "Expect" ] Nothing Nothing
-                            ]
-                            ((context.foundDocumentationExamplesInReadme
-                                |> List.concatMap .declarations
-                                |> List.map Elm.CodeGen.DeclNoComment
-                             )
-                                ++ [ Elm.CodeGen.valDecl
-                                        Nothing
-                                        (Elm.CodeGen.fqTyped [ "Test" ] "Test" [] |> Just)
-                                        "tests"
-                                        (Elm.CodeGen.fqConstruct [ "Test" ]
-                                            "describe"
-                                            [ Elm.CodeGen.string "documentation code snippets"
-                                            , Elm.CodeGen.list
-                                                ((context.foundDocumentationExamplesInReadme |> codeSnippetsToTestWithName "readme")
-                                                    :: (context.byModule
-                                                            |> FastDict.toList
-                                                            |> List.map
-                                                                (\( moduleName, moduleContext ) ->
-                                                                    elmCodeGenTestDescribe (moduleName |> String.join ".")
-                                                                        ((moduleContext
-                                                                            |> .foundDocumentationExamplesInModuleHeader
-                                                                            |> codeSnippetsToTestWithName "module header"
-                                                                         )
-                                                                            :: (moduleContext
-                                                                                    |> .foundDocumentationExamplesInMembers
-                                                                                    |> FastDict.toList
-                                                                                    |> List.map
-                                                                                        (\( documentedDeclaredName, codeSnippets ) ->
-                                                                                            codeSnippets |> codeSnippetsToTestWithName documentedDeclaredName
-                                                                                        )
-                                                                               )
-                                                                            |> List.filterMap identity
-                                                                        )
-                                                                )
-                                                       )
-                                                    |> List.filterMap identity
-                                                )
-                                            ]
-                                        )
-                                   ]
-                            )
-                            (Elm.CodeGen.emptyFileComment
-                                |> Elm.CodeGen.markdown "automatically generated by [elm-review-documentation-code-snippet](https://dark.elm.dmy.fr/packages/lue-bird/elm-review-documentation-code-snippet/latest)"
-                                |> Just
-                            )
+                        ({ foundDocumentationExamplesInReadme = context.foundDocumentationExamplesInReadme
+                         , byModule = context.byModule
+                         }
+                            |> createDocumentationCodeSnippetsTestFile
                             |> Elm.Pretty.pretty 80
                         )
                     ]
                 ]
+
+
+createDocumentationCodeSnippetsTestFile :
+    { foundDocumentationExamplesInReadme : List CodeSnippet
+    , byModule :
+        Dict
+            (List String)
+            { moduleInfo_
+                | foundDocumentationExamplesInModuleHeader : List CodeSnippet
+                , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
+            }
+    }
+    -> Elm.CodeGen.File
+createDocumentationCodeSnippetsTestFile =
+    \info ->
+        {- TODO
+           - #location is (readme | (moduleName\_\_(header | reference name))) \_\_(code snippet index 0 based)
+           - prefix declaration names based on #location
+           - add imports based on full qualifications present in all references (declarations, actual expressions and expectations)
+           - map all sub references (type, pattern, value/function) of declarations and actual and expected
+               - to fully qualified using Origin.determine
+               - if no full qualification is found, see if it's defined in `declarations` and adapt the #location name accordingly
+           - bonus: compare `.imports` with full qualifications present in all references and automatically add missing imports as a fix
+        -}
+        let
+            declarations : List Elm.Syntax.Declaration.Declaration
+            declarations =
+                (info.foundDocumentationExamplesInReadme
+                    |> List.concatMap .declarations
+                )
+                    ++ (info.byModule
+                            |> FastDict.values
+                            |> List.concatMap
+                                (\moduleContext ->
+                                    (moduleContext
+                                        |> .foundDocumentationExamplesInModuleHeader
+                                        |> List.concatMap .declarations
+                                    )
+                                        ++ (moduleContext
+                                                |> .foundDocumentationExamplesInMembers
+                                                |> FastDict.values
+                                                |> List.concat
+                                                |> List.concatMap .declarations
+                                           )
+                                )
+                       )
+
+            codeSnippetTests : List Elm.CodeGen.Expression
+            codeSnippetTests =
+                (info.foundDocumentationExamplesInReadme |> codeSnippetsToTestWithName "readme")
+                    :: (info.byModule
+                            |> FastDict.toList
+                            |> List.map
+                                (\( moduleName, moduleContext ) ->
+                                    elmCodeGenTestDescribe (moduleName |> String.join ".")
+                                        ((moduleContext
+                                            |> .foundDocumentationExamplesInModuleHeader
+                                            |> codeSnippetsToTestWithName "module header"
+                                         )
+                                            :: (moduleContext
+                                                    |> .foundDocumentationExamplesInMembers
+                                                    |> FastDict.toList
+                                                    |> List.map
+                                                        (\( documentedDeclaredName, memberCodeSnippets ) ->
+                                                            memberCodeSnippets |> codeSnippetsToTestWithName documentedDeclaredName
+                                                        )
+                                               )
+                                            |> List.filterMap identity
+                                        )
+                                )
+                       )
+                    |> List.filterMap identity
+
+            codeSnippets : List { imports : List Elm.Syntax.Import.Import, checks : List CodeSnippetCheck, declarations : List Declaration }
+            codeSnippets =
+                info.foundDocumentationExamplesInReadme
+                    ++ (info.byModule
+                            |> FastDict.values
+                            |> List.concatMap
+                                (\moduleContext ->
+                                    moduleContext.foundDocumentationExamplesInModuleHeader
+                                        ++ (moduleContext
+                                                |> .foundDocumentationExamplesInMembers
+                                                |> FastDict.values
+                                                |> List.concat
+                                           )
+                                )
+                       )
+
+            codeSnippetUsedModules : CodeSnippet -> Set Elm.Syntax.ModuleName.ModuleName
+            codeSnippetUsedModules =
+                \codeSnippet ->
+                    Set.union
+                        (codeSnippet.declarations |> List.LocalExtra.setUnionMap Declaration.LocalExtra.usedModules)
+                        (codeSnippet.checks |> List.LocalExtra.setUnionMap codeSnippetCheckUsedModules)
+
+            codeSnippetCheckUsedModules : CodeSnippetCheck -> Set Elm.Syntax.ModuleName.ModuleName
+            codeSnippetCheckUsedModules =
+                \codeSnippetCheck ->
+                    Set.union
+                        (codeSnippetCheck.checkedExpression |> Expression.LocalExtra.usedModules)
+                        (case codeSnippetCheck.expectation of
+                            Equals expectedExpression ->
+                                expectedExpression |> Expression.LocalExtra.usedModules
+
+                            IsOfType expectedType ->
+                                expectedType |> Type.LocalExtra.usedModules
+                        )
+        in
+        Elm.CodeGen.file
+            (Elm.CodeGen.normalModule [ "DocumentationCodeSnippet.Test" ] [ Elm.CodeGen.funExpose "tests" ])
+            (codeSnippets
+                |> List.LocalExtra.setUnionMap codeSnippetUsedModules
+                |> Set.insert [ "Expect" ]
+                |> Set.insert [ "Test" ]
+                |> Set.toList
+                |> List.map (\moduleName -> Elm.CodeGen.importStmt moduleName Nothing Nothing)
+            )
+            (Elm.CodeGen.valDecl
+                Nothing
+                (Elm.CodeGen.fqTyped [ "Test" ] "Test" [] |> Just)
+                "tests"
+                (Elm.CodeGen.fqConstruct [ "Test" ]
+                    "describe"
+                    [ Elm.CodeGen.string "documentation code snippets"
+                    , Elm.CodeGen.list
+                        (case codeSnippetTests of
+                            [] ->
+                                [ Elm.CodeGen.fqConstruct [ "Test" ]
+                                    "test"
+                                    [ Elm.CodeGen.string "currently none. Since having no code snippets is perfectly fine, adding this simple test tells elm-test that everything's good (empty tests fail or throw warnings)"
+                                    , Elm.CodeGen.lambda [ Elm.CodeGen.unitPattern ] (Elm.CodeGen.fqConstruct [ "Expect" ] "pass" [])
+                                    ]
+                                ]
+
+                            codeSnippetTest0 :: codeSnippetTest1Up ->
+                                codeSnippetTest0 :: codeSnippetTest1Up
+                        )
+                    ]
+                )
+                :: (declarations
+                        |> List.map Elm.CodeGen.DeclNoComment
+                   )
+            )
+            (Elm.CodeGen.emptyFileComment
+                |> Elm.CodeGen.markdown "automatically generated by [elm-review-documentation-code-snippet](https://dark.elm.dmy.fr/packages/lue-bird/elm-review-documentation-code-snippet/latest)"
+                |> Just
+            )
 
 
 elmCodeGenTestDescribe : String -> List Elm.CodeGen.Expression -> Maybe Elm.CodeGen.Expression
@@ -517,7 +614,7 @@ codeSnippetExpectationCheckToExpectationCode =
     \codeSnippetCheck ->
         case codeSnippetCheck.expectation of
             Equals expectedExpression ->
-                Elm.CodeGen.pipe codeSnippetCheck.checkedExpression
+                Elm.CodeGen.pipe (codeSnippetCheck.checkedExpression |> Elm.CodeGen.parens)
                     [ Elm.CodeGen.fqConstruct [ "Expect" ] "equal" [ expectedExpression ] ]
 
             IsOfType expectedType ->
@@ -657,6 +754,10 @@ markdownElmCodeBlocksInModule =
     \readmeString ->
         case readmeString |> RoughMarkdown.parse of
             Err _ ->
+                let
+                    _ =
+                        Debug.log "rough markdown parsing failed" ()
+                in
                 []
 
             Ok markdownBlocks ->
@@ -681,6 +782,9 @@ markdownElmCodeBlocksInModule =
                                         Just "elm" ->
                                             soFar |> (::) codeBlock.body
 
+                                        Just "" ->
+                                            soFar |> (::) codeBlock.body
+
                                         Just _ ->
                                             soFar
                         )
@@ -693,6 +797,10 @@ markdownElmCodeBlocksInReadme =
     \documentationString ->
         case documentationString |> RoughMarkdown.parse of
             Err _ ->
+                let
+                    _ =
+                        Debug.log "rough markdown parsing failed" ()
+                in
                 []
 
             Ok markdownBlocks ->
@@ -856,6 +964,10 @@ elmCodeBlockToSnippet =
         in
         case split.withoutChecks |> ElmSyntaxParse.importsAndDeclarations of
             Nothing ->
+                let
+                    _ =
+                        Debug.log "imports and declarations parsing failed" split.withoutChecks
+                in
                 Nothing
 
             Just importsAndDeclarations ->
@@ -866,120 +978,142 @@ elmCodeBlockToSnippet =
                     |> Just
 
 
+{-| A chunk is opened by an unindented line and only closed by a blank line
+-}
+codeBlockToChunks : String -> List String
+codeBlockToChunks =
+    \codeBlock ->
+        codeBlock
+            |> String.split "\n"
+            |> List.foldl
+                (\line soFar ->
+                    case line |> String.uncons of
+                        Nothing ->
+                            { lastLineWasBlank = True
+                            , chunks = soFar.chunks
+                            }
+
+                        Just ( lineFirstChar, lineCharsAfterFirst ) ->
+                            { lastLineWasBlank = False
+                            , chunks =
+                                case soFar.chunks of
+                                    [] ->
+                                        case lineFirstChar of
+                                            ' ' ->
+                                                []
+
+                                            nonSpaceFirstChar ->
+                                                [ { lineBeforeIsUnindented = True, content = String.cons nonSpaceFirstChar lineCharsAfterFirst } ]
+
+                                    currentChunk :: blocksBeforeCurrentChunk ->
+                                        case lineFirstChar of
+                                            ' ' ->
+                                                { lineBeforeIsUnindented = False
+                                                , content = [ currentChunk.content, "\n ", lineCharsAfterFirst ] |> String.concat
+                                                }
+                                                    :: blocksBeforeCurrentChunk
+
+                                            lineFirstCharNonSpace ->
+                                                if currentChunk.lineBeforeIsUnindented then
+                                                    { lineBeforeIsUnindented = True
+                                                    , content = [ currentChunk.content, "\n", String.cons lineFirstCharNonSpace lineCharsAfterFirst ] |> String.concat
+                                                    }
+                                                        :: blocksBeforeCurrentChunk
+
+                                                else
+                                                    { lineBeforeIsUnindented = True, content = String.cons lineFirstCharNonSpace lineCharsAfterFirst }
+                                                        :: currentChunk
+                                                        :: blocksBeforeCurrentChunk
+                            }
+                )
+                { chunks = [], lastLineWasBlank = True }
+            |> .chunks
+            |> List.reverse
+            |> List.map .content
+
+
 elmCodeBlockLinesSplitOffChecks : String -> { withoutChecks : String, checks : List CodeSnippetCheck }
 elmCodeBlockLinesSplitOffChecks =
     \elmCodeBlock ->
         let
-            -- a chunk is opened by an unindented line and only closed by a blank line
-            chunks : List String
-            chunks =
-                elmCodeBlock
-                    |> String.split "\n"
-                    |> List.foldl
-                        (\line soFar ->
-                            case line |> String.uncons of
-                                Nothing ->
-                                    { lastLineWasBlank = True
-                                    , chunks = soFar.chunks
-                                    }
+            chunkSplitAt : String -> (String -> List String)
+            chunkSplitAt mark =
+                \chunk ->
+                    case chunk |> String.split mark of
+                        -- can't happen
+                        [] ->
+                            [ chunk ]
 
-                                Just ( lineFirstChar, lineCharsAfterFirst ) ->
-                                    { lastLineWasBlank = False
-                                    , chunks =
-                                        case soFar.chunks of
-                                            [] ->
-                                                case lineFirstChar of
-                                                    ' ' ->
-                                                        []
+                        [ onlyChunk ] ->
+                            [ onlyChunk ]
 
-                                                    nonSpaceFirstChar ->
-                                                        [ { lineBeforeIsUnindented = True, content = String.cons nonSpaceFirstChar lineCharsAfterFirst } ]
-
-                                            currentChunk :: blocksBeforeCurrentChunk ->
-                                                case lineFirstChar of
-                                                    ' ' ->
-                                                        { lineBeforeIsUnindented = False
-                                                        , content = [ currentChunk.content, "\n ", lineCharsAfterFirst ] |> String.concat
-                                                        }
-                                                            :: blocksBeforeCurrentChunk
-
-                                                    lineFirstCharNonSpace ->
-                                                        if currentChunk.lineBeforeIsUnindented then
-                                                            { lineBeforeIsUnindented = True
-                                                            , content = [ currentChunk.content, "\n", String.cons lineFirstCharNonSpace lineCharsAfterFirst ] |> String.concat
-                                                            }
-                                                                :: blocksBeforeCurrentChunk
-
-                                                        else
-                                                            { lineBeforeIsUnindented = True, content = String.cons lineFirstCharNonSpace lineCharsAfterFirst }
-                                                                :: currentChunk
-                                                                :: blocksBeforeCurrentChunk
-                                    }
-                        )
-                        { chunks = [], lastLineWasBlank = True }
-                    |> .chunks
-                    |> List.reverse
-                    |> List.map .content
-
-            separate : List String -> { withoutChecks : String, checks : List CodeSnippetCheck }
-            separate chunksLeft =
-                case chunksLeft of
-                    [] ->
-                        { withoutChecks = "", checks = [] }
-
-                    [ onlyChunk ] ->
-                        { withoutChecks = onlyChunk, checks = [] }
-
-                    chunk0 :: chunk1 :: chunk2Up ->
-                        case chunk0 |> ElmSyntaxParse.expression of
-                            Nothing ->
-                                let
-                                    chunk1Up : { withoutChecks : String, checks : List CodeSnippetCheck }
-                                    chunk1Up =
-                                        (chunk1 :: chunk2Up) |> separate
-                                in
-                                { chunk1Up | withoutChecks = [ chunk0, "\n\n", chunk1Up.withoutChecks ] |> String.concat }
-
-                            Just checked ->
-                                let
-                                    chunk2UpSeparated : { withoutChecks : String, checks : List CodeSnippetCheck }
-                                    chunk2UpSeparated =
-                                        chunk2Up |> separate
-                                in
-                                case chunk1 |> toMarked "-->" of
-                                    Just expectedExpressionSource ->
-                                        case expectedExpressionSource |> ElmSyntaxParse.expression of
-                                            Nothing ->
-                                                -- not a check
-                                                { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
-
-                                            Just expectedExpression ->
-                                                { chunk2UpSeparated
-                                                    | checks =
-                                                        chunk2UpSeparated.checks
-                                                            |> (::) { checkedExpression = checked, expectation = Equals expectedExpression }
-                                                }
-
-                                    Nothing ->
-                                        case chunk1 |> toMarked "--:" of
-                                            Just expectedTypeSource ->
-                                                case expectedTypeSource |> ElmSyntaxParse.type_ of
-                                                    Nothing ->
-                                                        -- not a check
-                                                        { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
-
-                                                    Just expectedType ->
-                                                        { chunk2UpSeparated
-                                                            | checks =
-                                                                chunk2UpSeparated.checks
-                                                                    |> (::) { checkedExpression = checked, expectation = IsOfType expectedType }
-                                                        }
-
-                                            Nothing ->
-                                                -- not a check
-                                                { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
+                        realChunk0 :: realChunk1 :: realChunk2Up ->
+                            [ realChunk0, "-->" ++ ((realChunk1 :: realChunk2Up) |> String.join "-->") ]
         in
-        chunks |> separate
+        elmCodeBlock
+            |> codeBlockToChunks
+            |> List.concatMap (chunkSplitAt "-->")
+            |> List.concatMap (chunkSplitAt "--:")
+            |> elmCodeBlockChunksSplitOffChecks
+
+
+elmCodeBlockChunksSplitOffChecks : List String -> { withoutChecks : String, checks : List CodeSnippetCheck }
+elmCodeBlockChunksSplitOffChecks chunks =
+    case chunks of
+        [] ->
+            { withoutChecks = "", checks = [] }
+
+        [ onlyChunk ] ->
+            { withoutChecks = onlyChunk, checks = [] }
+
+        chunk0 :: chunk1 :: chunk2Up ->
+            case chunk0 |> ElmSyntaxParse.expression of
+                Nothing ->
+                    let
+                        chunk1Up : { withoutChecks : String, checks : List CodeSnippetCheck }
+                        chunk1Up =
+                            (chunk1 :: chunk2Up) |> elmCodeBlockChunksSplitOffChecks
+                    in
+                    { chunk1Up | withoutChecks = [ chunk0, "\n\n", chunk1Up.withoutChecks ] |> String.concat }
+
+                Just checked ->
+                    let
+                        chunk2UpSeparated : { withoutChecks : String, checks : List CodeSnippetCheck }
+                        chunk2UpSeparated =
+                            chunk2Up |> elmCodeBlockChunksSplitOffChecks
+                    in
+                    case chunk1 |> toMarked "-->" of
+                        Just expectedExpressionSource ->
+                            case expectedExpressionSource |> ElmSyntaxParse.expression of
+                                Nothing ->
+                                    -- not a check
+                                    { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
+
+                                Just expectedExpression ->
+                                    { chunk2UpSeparated
+                                        | checks =
+                                            chunk2UpSeparated.checks
+                                                |> (::) { checkedExpression = checked, expectation = Equals expectedExpression }
+                                    }
+
+                        Nothing ->
+                            case chunk1 |> toMarked "--:" of
+                                Just expectedTypeSource ->
+                                    case expectedTypeSource |> ElmSyntaxParse.type_ of
+                                        Nothing ->
+                                            -- not a check
+                                            { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
+
+                                        Just expectedType ->
+                                            { chunk2UpSeparated
+                                                | checks =
+                                                    chunk2UpSeparated.checks
+                                                        |> (::) { checkedExpression = checked, expectation = IsOfType expectedType }
+                                            }
+
+                                Nothing ->
+                                    -- not a check
+                                    { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
 
 
 toMarked : String -> (String -> Maybe String)
@@ -995,6 +1129,7 @@ toMarked mark =
                         linesWithoutStart |> Just
 
                     Nothing ->
+                        -- TODO check for lat line single-line marked
                         Nothing
 
 
