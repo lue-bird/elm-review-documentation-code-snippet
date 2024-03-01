@@ -42,15 +42,20 @@ import Type.LocalExtra
 
 type alias ProjectContext =
     { documentationCodeSnippetTestModuleKey : Maybe ModuleKey
-    , byModule :
+    , exposesByModule :
         Dict
             Elm.Syntax.ModuleName.ModuleName
             { exposedChoiceTypesExposingVariants : Dict String (Set String)
             , exposedValueAndFunctionAndTypeAliasNames : Set String
-            , foundDocumentationExamplesInModuleHeader : List CodeSnippet
-            , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
             }
-    , foundDocumentationExamplesInReadme : List CodeSnippet
+    , codeSnippetsByModule :
+        Dict
+            Elm.Syntax.ModuleName.ModuleName
+            { key : Review.Rule.ModuleKey
+            , inModuleHeader : List CodeSnippet
+            , inMembers : Dict String (List CodeSnippet)
+            }
+    , readmeCodeSnippets : List CodeSnippet
     }
 
 
@@ -82,8 +87,8 @@ type alias NonTestModuleContext =
         { exposingKind : ExposingKind
         , exposedValueAndFunctionAndTypeAliasNames : Set String
         , exposedChoiceTypesExposingVariants : Dict String (Set String)
-        , foundDocumentationExamplesInModuleHeader : List CodeSnippet
-        , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
+        , headerCodeSnippets : List CodeSnippet
+        , codeSnippetsByMember : Dict String (List CodeSnippet)
         }
 
 
@@ -261,7 +266,7 @@ check =
 
                     Just readme ->
                         { context
-                            | foundDocumentationExamplesInReadme =
+                            | readmeCodeSnippets =
                                 readme.content
                                     |> markdownElmCodeBlocksInReadme
                                     |> List.filterMap elmCodeBlockToSnippet
@@ -272,8 +277,8 @@ check =
             (\dependencyDocsDict context ->
                 ( []
                 , { context
-                    | byModule =
-                        FastDict.union context.byModule
+                    | exposesByModule =
+                        FastDict.union context.exposesByModule
                             (dependencyDocsDict
                                 |> Dict.values
                                 |> List.concatMap (\dependencyDocs -> dependencyDocs |> Review.Project.Dependency.modules)
@@ -300,8 +305,6 @@ check =
                                                     |> FastDict.fromList
                                           , exposedValueAndFunctionAndTypeAliasNames =
                                                 moduleDocs |> moduleDocsValueAndFunctionAndTypeAliasNames
-                                          , foundDocumentationExamplesInModuleHeader = []
-                                          , foundDocumentationExamplesInMembers = FastDict.empty
                                           }
                                         )
                                     )
@@ -363,8 +366,8 @@ check =
 
                                         Just memberDocumented ->
                                             { nonTestModuleContext
-                                                | foundDocumentationExamplesInMembers =
-                                                    nonTestModuleContext.foundDocumentationExamplesInMembers
+                                                | codeSnippetsByMember =
+                                                    nonTestModuleContext.codeSnippetsByMember
                                                         |> FastDict.insert memberDocumented.name
                                                             (memberDocumented.documentation
                                                                 |> markdownElmCodeBlocksInModule
@@ -409,8 +412,9 @@ checkFullProject =
                     [ Review.Fix.replaceRangeBy
                         -- everything
                         { start = { row = 1, column = 1 }, end = { row = 1000000, column = 1 } }
-                        ({ foundDocumentationExamplesInReadme = context.foundDocumentationExamplesInReadme
-                         , byModule = context.byModule
+                        ({ readmeCodeSnippets = context.readmeCodeSnippets
+                         , exposesByModule = context.exposesByModule
+                         , codeSnippetsByModule = context.codeSnippetsByModule
                          }
                             |> createDocumentationCodeSnippetsTestFile
                             |> Elm.Pretty.pretty 80
@@ -435,46 +439,31 @@ elmCodeGenTestDescribe description subTests =
 
 
 createDocumentationCodeSnippetsTestFile :
-    { foundDocumentationExamplesInReadme : List CodeSnippet
-    , byModule :
+    { readmeCodeSnippets : List CodeSnippet
+    , exposesByModule :
         Dict
             Elm.Syntax.ModuleName.ModuleName
             { exposedChoiceTypesExposingVariants : Dict String (Set String)
             , exposedValueAndFunctionAndTypeAliasNames : Set String
-            , foundDocumentationExamplesInModuleHeader : List CodeSnippet
-            , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
+            }
+    , codeSnippetsByModule :
+        Dict
+            Elm.Syntax.ModuleName.ModuleName
+            { key : Review.Rule.ModuleKey
+            , inModuleHeader : List CodeSnippet
+            , inMembers : Dict String (List CodeSnippet)
             }
     }
     -> Elm.CodeGen.File
 createDocumentationCodeSnippetsTestFile =
     \infoRaw ->
         let
-            codeSnippetsFullyQualifyAndAddLocationPrefix : String -> (List CodeSnippet -> List CodeSnippet)
-            codeSnippetsFullyQualifyAndAddLocationPrefix locationPrefix =
-                \codeSnippetsRaw ->
-                    codeSnippetsRaw
-                        |> List.indexedMap
-                            (\snippetIndex codeSnippet ->
-                                codeSnippet
-                                    |> codeSnippetFullyQualifyAndAddLocationPrefix
-                                        ([ locationPrefix, "_", snippetIndex |> String.fromInt ] |> String.concat)
-                            )
-
-            exposesByModule :
-                Dict
-                    Elm.Syntax.ModuleName.ModuleName
-                    { exposedChoiceTypesExposingVariants : Dict String (Set String)
-                    , exposedValueAndFunctionAndTypeAliasNames : Set String
-                    }
-            exposesByModule =
-                infoRaw.byModule
-                    |> FastDict.map
-                        (\_ moduleInfoRaw ->
-                            { exposedChoiceTypesExposingVariants = moduleInfoRaw.exposedChoiceTypesExposingVariants
-                            , exposedValueAndFunctionAndTypeAliasNames = moduleInfoRaw.exposedValueAndFunctionAndTypeAliasNames
-                            }
-                        )
-
+            {-
+               - prefix declaration names based on #location
+               - map all sub references (type, pattern, value/function) of declarations and actual and expected
+                 - to fully qualified using Origin.determine
+                 - if no full qualification is found, see if it's defined in `declarations` and adapt the #location name accordingly
+            -}
             codeSnippetFullyQualifyAndAddLocationPrefix : String -> (CodeSnippet -> CodeSnippet)
             codeSnippetFullyQualifyAndAddLocationPrefix locationPrefix =
                 \codeSnippet ->
@@ -482,7 +471,7 @@ createDocumentationCodeSnippetsTestFile =
                         imports : Imports
                         imports =
                             Imports.implicit
-                                |> Imports.insertSyntaxImports exposesByModule codeSnippet.imports
+                                |> Imports.insertSyntaxImports infoRaw.exposesByModule codeSnippet.imports
 
                         referenceFullyQualifyAndAdaptLocationPrefix : ( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String )
                         referenceFullyQualifyAndAdaptLocationPrefix =
@@ -525,95 +514,76 @@ createDocumentationCodeSnippetsTestFile =
                     , checks = codeSnippet.checks |> List.map codeSnippetCheckFullyQualify
                     }
 
-            {-
-               - prefix declaration names based on #location
-               - map all sub references (type, pattern, value/function) of declarations and actual and expected
-                 - to fully qualified using Origin.determine
-                 - if no full qualification is found, see if it's defined in `declarations` and adapt the #location name accordingly
-            -}
-            info :
-                { foundDocumentationExamplesInReadme : List CodeSnippet
-                , byModule :
-                    Dict
-                        Elm.Syntax.ModuleName.ModuleName
-                        { foundDocumentationExamplesInModuleHeader : List CodeSnippet
-                        , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
-                        }
-                }
-            info =
-                { foundDocumentationExamplesInReadme =
-                    infoRaw.foundDocumentationExamplesInReadme
-                        |> codeSnippetsFullyQualifyAndAddLocationPrefix "Readme"
-                , byModule =
-                    infoRaw.byModule
-                        |> FastDict.map
-                            (\moduleName moduleInfoRaw ->
-                                let
-                                    moduleNameLocationPrefix : String -> String
-                                    moduleNameLocationPrefix subName =
-                                        [ moduleName |> String.join "_", "__", subName ] |> String.concat
-
-                                    codeSnippetAddImportLocalModuleExposingAll : CodeSnippet -> CodeSnippet
-                                    codeSnippetAddImportLocalModuleExposingAll =
-                                        \codeSnippet ->
-                                            { codeSnippet
-                                                | imports =
-                                                    Elm.CodeGen.importStmt moduleName Nothing (Elm.CodeGen.exposeAll |> Just)
-                                                        :: codeSnippet.imports
-                                            }
-                                in
-                                { foundDocumentationExamplesInModuleHeader =
-                                    moduleInfoRaw.foundDocumentationExamplesInModuleHeader
-                                        |> List.map codeSnippetAddImportLocalModuleExposingAll
-                                        |> codeSnippetsFullyQualifyAndAddLocationPrefix (moduleNameLocationPrefix "Header")
-                                , foundDocumentationExamplesInMembers =
-                                    moduleInfoRaw.foundDocumentationExamplesInMembers
-                                        |> FastDict.map
-                                            (\memberName memberCodeSnippets ->
-                                                memberCodeSnippets
-                                                    |> List.map codeSnippetAddImportLocalModuleExposingAll
-                                                    |> codeSnippetsFullyQualifyAndAddLocationPrefix (moduleNameLocationPrefix memberName)
-                                            )
-                                }
+            codeSnippetsFullyQualifyAndAddLocationPrefix : String -> (List CodeSnippet -> List CodeSnippet)
+            codeSnippetsFullyQualifyAndAddLocationPrefix locationPrefix =
+                \codeSnippetsRaw ->
+                    codeSnippetsRaw
+                        |> List.indexedMap
+                            (\snippetIndex codeSnippet ->
+                                codeSnippet
+                                    |> codeSnippetFullyQualifyAndAddLocationPrefix
+                                        ([ locationPrefix, "_", snippetIndex |> String.fromInt ] |> String.concat)
                             )
-                }
 
-            declarations : List Elm.Syntax.Declaration.Declaration
-            declarations =
-                (info.foundDocumentationExamplesInReadme
-                    |> List.concatMap .declarations
-                )
-                    ++ (info.byModule
-                            |> FastDict.values
-                            |> List.concatMap
-                                (\moduleContext ->
-                                    (moduleContext
-                                        |> .foundDocumentationExamplesInModuleHeader
-                                        |> List.concatMap .declarations
-                                    )
-                                        ++ (moduleContext
-                                                |> .foundDocumentationExamplesInMembers
-                                                |> FastDict.values
-                                                |> List.concat
-                                                |> List.concatMap .declarations
-                                           )
-                                )
-                       )
+            readmeCodeSnippets : List CodeSnippet
+            readmeCodeSnippets =
+                infoRaw.readmeCodeSnippets |> codeSnippetsFullyQualifyAndAddLocationPrefix "Readme"
+
+            codeSnippetsByModule :
+                Dict
+                    Elm.Syntax.ModuleName.ModuleName
+                    { key : Review.Rule.ModuleKey
+                    , inModuleHeader : List CodeSnippet
+                    , inMembers : Dict String (List CodeSnippet)
+                    }
+            codeSnippetsByModule =
+                infoRaw.codeSnippetsByModule
+                    |> FastDict.map
+                        (\moduleName moduleInfoRaw ->
+                            let
+                                moduleNameLocationPrefix : String -> String
+                                moduleNameLocationPrefix subName =
+                                    [ moduleName |> String.join "_", "__", subName ] |> String.concat
+
+                                codeSnippetAddImportLocalModuleExposingAll : CodeSnippet -> CodeSnippet
+                                codeSnippetAddImportLocalModuleExposingAll =
+                                    \codeSnippet ->
+                                        { codeSnippet
+                                            | imports =
+                                                Elm.CodeGen.importStmt moduleName Nothing (Elm.CodeGen.exposeAll |> Just)
+                                                    :: codeSnippet.imports
+                                        }
+                            in
+                            { key = moduleInfoRaw.key
+                            , inModuleHeader =
+                                moduleInfoRaw.inModuleHeader
+                                    |> List.map codeSnippetAddImportLocalModuleExposingAll
+                                    |> codeSnippetsFullyQualifyAndAddLocationPrefix (moduleNameLocationPrefix "Header")
+                            , inMembers =
+                                moduleInfoRaw.inMembers
+                                    |> FastDict.map
+                                        (\memberName memberCodeSnippets ->
+                                            memberCodeSnippets
+                                                |> List.map codeSnippetAddImportLocalModuleExposingAll
+                                                |> codeSnippetsFullyQualifyAndAddLocationPrefix (moduleNameLocationPrefix memberName)
+                                        )
+                            }
+                        )
 
             codeSnippetTests : List Elm.CodeGen.Expression
             codeSnippetTests =
-                (info.foundDocumentationExamplesInReadme |> codeSnippetsToTestWithName "readme")
-                    :: (info.byModule
+                (readmeCodeSnippets |> codeSnippetsToTestWithName "readme")
+                    :: (codeSnippetsByModule
                             |> FastDict.toList
                             |> List.map
                                 (\( moduleName, moduleContext ) ->
                                     elmCodeGenTestDescribe (moduleName |> String.join ".")
                                         ((moduleContext
-                                            |> .foundDocumentationExamplesInModuleHeader
+                                            |> .inModuleHeader
                                             |> codeSnippetsToTestWithName "module header"
                                          )
                                             :: (moduleContext
-                                                    |> .foundDocumentationExamplesInMembers
+                                                    |> .inMembers
                                                     |> FastDict.toList
                                                     |> List.map
                                                         (\( documentedDeclaredName, memberCodeSnippets ) ->
@@ -628,14 +598,14 @@ createDocumentationCodeSnippetsTestFile =
 
             codeSnippets : List { imports : List Elm.Syntax.Import.Import, checks : List CodeSnippetCheck, declarations : List Declaration }
             codeSnippets =
-                info.foundDocumentationExamplesInReadme
-                    ++ (info.byModule
+                readmeCodeSnippets
+                    ++ (codeSnippetsByModule
                             |> FastDict.values
                             |> List.concatMap
                                 (\moduleContext ->
-                                    moduleContext.foundDocumentationExamplesInModuleHeader
+                                    moduleContext.inModuleHeader
                                         ++ (moduleContext
-                                                |> .foundDocumentationExamplesInMembers
+                                                |> .inMembers
                                                 |> FastDict.values
                                                 |> List.concat
                                            )
@@ -693,7 +663,8 @@ createDocumentationCodeSnippetsTestFile =
                         )
                     ]
                 )
-                :: (declarations
+                :: (codeSnippets
+                        |> List.concatMap .declarations
                         |> List.map Elm.CodeGen.DeclNoComment
                    )
             )
@@ -940,8 +911,9 @@ markdownElmCodeBlocksInReadme =
 initialProjectContext : ProjectContext
 initialProjectContext =
     { documentationCodeSnippetTestModuleKey = Nothing
-    , byModule = FastDict.empty
-    , foundDocumentationExamplesInReadme = []
+    , exposesByModule = FastDict.empty
+    , codeSnippetsByModule = FastDict.empty
+    , readmeCodeSnippets = []
     }
 
 
@@ -966,8 +938,8 @@ projectToModuleContextCreator =
                             |> List.map (\typeName -> ( typeName, Set.empty ))
                             |> FastDict.fromList
                     , exposedValueAndFunctionAndTypeAliasNames = exposingInfo.exposedValueAndFunctionAndTypeAliasNames
-                    , foundDocumentationExamplesInModuleHeader = []
-                    , foundDocumentationExamplesInMembers = FastDict.empty
+                    , headerCodeSnippets = []
+                    , codeSnippetsByMember = FastDict.empty
                     }
                         |> NonTestModuleContext
         )
@@ -985,34 +957,41 @@ projectContextsMerge a b =
 
             Nothing ->
                 b.documentationCodeSnippetTestModuleKey
-    , byModule = FastDict.union a.byModule b.byModule
-    , foundDocumentationExamplesInReadme = a.foundDocumentationExamplesInReadme
+    , exposesByModule = FastDict.union a.exposesByModule b.exposesByModule
+    , codeSnippetsByModule = FastDict.union a.codeSnippetsByModule b.codeSnippetsByModule
+    , readmeCodeSnippets = a.readmeCodeSnippets
     }
 
 
 moduleToProjectContextCreator : Review.Rule.ContextCreator ModuleContext ProjectContext
 moduleToProjectContextCreator =
     Review.Rule.initContextCreator
-        (\moduleName moduleContext ->
+        (\moduleKey moduleName moduleContext ->
             case moduleContext of
                 TestModuleContext testModuleKey ->
                     { documentationCodeSnippetTestModuleKey = testModuleKey |> Just
-                    , byModule = FastDict.empty
-                    , foundDocumentationExamplesInReadme = []
+                    , exposesByModule = FastDict.empty
+                    , codeSnippetsByModule = FastDict.empty
+                    , readmeCodeSnippets = []
                     }
 
                 NonTestModuleContext nonTestModuleContext ->
                     { documentationCodeSnippetTestModuleKey = Nothing
-                    , byModule =
+                    , exposesByModule =
                         FastDict.singleton moduleName
                             { exposedChoiceTypesExposingVariants = nonTestModuleContext.exposedChoiceTypesExposingVariants
                             , exposedValueAndFunctionAndTypeAliasNames = nonTestModuleContext.exposedValueAndFunctionAndTypeAliasNames
-                            , foundDocumentationExamplesInModuleHeader = nonTestModuleContext.foundDocumentationExamplesInModuleHeader
-                            , foundDocumentationExamplesInMembers = nonTestModuleContext.foundDocumentationExamplesInMembers
                             }
-                    , foundDocumentationExamplesInReadme = []
+                    , codeSnippetsByModule =
+                        FastDict.singleton moduleName
+                            { key = moduleKey
+                            , inModuleHeader = nonTestModuleContext.headerCodeSnippets
+                            , inMembers = nonTestModuleContext.codeSnippetsByMember
+                            }
+                    , readmeCodeSnippets = []
                     }
         )
+        |> Review.Rule.withModuleKey
         |> Review.Rule.withModuleName
 
 
