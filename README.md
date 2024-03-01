@@ -2,6 +2,25 @@
 
 [🔧 `Review.Documentation.CodeSnippet.check`](https://package.elm-lang.org/packages/lue-bird/elm-review-documentation-example/1.0.0/Review-Documentation-CodeSnippet#check "provides fixes")
 automatically generates tests for examples in your readme and module documentation.
+```elm
+{-| `Dict.keys` but returning a `Set` instead of a `List`.
+
+    import Dict
+    import Set
+
+    Dict.fromList [ ( 0, "A" ), ( 1, "B" ), ( 2, "C" ) ]
+        |> keySet
+    --> Set.fromList [ 0, 1, 2 ]
+
+-}
+keySet = ...
+```
+which will generate a test with
+```elm
+Dict.fromList [ ( 0, "A" ), ( 1, "B" ), ( 2, "C" ) ]
+    |> keySet
+    |> Expect.equal (Set.fromList [ 0, 1, 2 ])
+```
 If you know [`elm-verify-examples`](https://github.com/stoeffel/elm-verify-examples), you also know how this works.
 There are only a few extras like checking for types you'll get only by using this rule instead.
 
@@ -17,13 +36,10 @@ config =
 
 ## why?
 
-  - finding broken examples is confusing and will frustrate users
-
-  - finding examples that show incorrect results is even worse
-    
-  - examples in the documentation quickly get out of sync with your API.
-    Now, how do you find all the places where things changed for your examples?
-    The compiler certainly doesn't check them which makes it easy to miss some
+Finding broken or incorrect examples in the documentation is confusing and frustrating to new users.
+At the same time, these examples quickly get out of sync with your API.
+Now, how do you find all the places where things changed for your examples?
+The compiler certainly doesn't check them which makes it easy to miss some
 
 ## possible ideas for the future
 
