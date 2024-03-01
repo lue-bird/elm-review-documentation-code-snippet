@@ -423,7 +423,7 @@ createDocumentationCodeSnippetsTestFile :
     { foundDocumentationExamplesInReadme : List CodeSnippet
     , byModule :
         Dict
-            (List String)
+            Elm.Syntax.ModuleName.ModuleName
             { moduleInfo_
                 | foundDocumentationExamplesInModuleHeader : List CodeSnippet
                 , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
@@ -435,7 +435,6 @@ createDocumentationCodeSnippetsTestFile =
         {- TODO
            - #location is (readme | (moduleName\_\_(header | reference name))) \_\_(code snippet index 0 based)
            - prefix declaration names based on #location
-           - add imports based on full qualifications present in all references (declarations, actual expressions and expectations)
            - map all sub references (type, pattern, value/function) of declarations and actual and expected
                - to fully qualified using Origin.determine
                - if no full qualification is found, see if it's defined in `declarations` and adapt the #location name accordingly
@@ -1048,7 +1047,7 @@ elmCodeBlockLinesSplitOffChecks =
                             [ onlyChunk ]
 
                         realChunk0 :: realChunk1 :: realChunk2Up ->
-                            [ realChunk0, "-->" ++ ((realChunk1 :: realChunk2Up) |> String.join "-->") ]
+                            [ realChunk0, mark ++ ((realChunk1 :: realChunk2Up) |> String.join mark) ]
         in
         elmCodeBlock
             |> codeBlockToChunks
@@ -1129,7 +1128,6 @@ toMarked mark =
                         linesWithoutStart |> Just
 
                     Nothing ->
-                        -- TODO check for lat line single-line marked
                         Nothing
 
 
