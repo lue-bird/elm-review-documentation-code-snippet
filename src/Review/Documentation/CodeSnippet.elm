@@ -15,11 +15,14 @@ module Review.Documentation.CodeSnippet exposing (check)
 import Declaration.LocalExtra
 import Dict
 import Elm.CodeGen
+import Elm.DSLParser
 import Elm.Docs
+import Elm.Parser
 import Elm.Pretty
 import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.Exposing
 import Elm.Syntax.Expression
+import Elm.Syntax.File
 import Elm.Syntax.Import
 import Elm.Syntax.Module
 import Elm.Syntax.ModuleName
@@ -42,7 +45,7 @@ import Type.LocalExtra
 
 
 type alias ProjectContext =
-    { documentationCodeSnippetTestModuleKey : Maybe ModuleKey
+    { documentationCodeSnippetTestModule : Maybe { key : ModuleKey, source : String }
     , exposesByModule :
         Dict
             Elm.Syntax.ModuleName.ModuleName
@@ -502,7 +505,7 @@ commentToModuleHeader resources =
 checkFullProject : ProjectContext -> List (Review.Rule.Error { useErrorForModule : () })
 checkFullProject =
     \context ->
-        case context.documentationCodeSnippetTestModuleKey of
+        case context.documentationCodeSnippetTestModule of
             Nothing ->
                 [ Review.Rule.globalError
                     { message = "documentation code snippet test module needs to be added"
@@ -512,26 +515,49 @@ checkFullProject =
                     }
                 ]
 
-            Just documentationCodeSnippetTestModuleKey ->
-                [ Review.Rule.errorForModuleWithFix documentationCodeSnippetTestModuleKey
-                    { message = "documentation code snippet test can be added"
-                    , details =
-                        [ "Adding them will help verify that code blocks in your readme and module documentation work correctly."
-                        ]
-                    }
-                    { start = { row = 1, column = 1 }, end = { row = 1, column = 7 } }
-                    [ Review.Fix.replaceRangeBy
-                        -- everything
-                        { start = { row = 1, column = 1 }, end = { row = 1000000, column = 1 } }
-                        ({ readmeCodeSnippets = context.readmeCodeSnippets
-                         , exposesByModule = context.exposesByModule
-                         , codeSnippetsByModule = context.codeSnippetsByModule
-                         }
+            Just documentationCodeSnippetTestModule ->
+                let
+                    generatedTestFile : String
+                    generatedTestFile =
+                        { readmeCodeSnippets = context.readmeCodeSnippets
+                        , exposesByModule = context.exposesByModule
+                        , codeSnippetsByModule = context.codeSnippetsByModule
+                        }
                             |> createDocumentationCodeSnippetsTestFile
                             |> Elm.Pretty.pretty 80
-                        )
+
+                    testFileRequiresChanges : Bool
+                    testFileRequiresChanges =
+                        -- parse and format the existing test module, then compare it with the generated one.
+                        -- This is somewhat roundabout but I wasn't able to find something simple that's nicer
+                        case documentationCodeSnippetTestModule.source |> Elm.DSLParser.parse of
+                            Err _ ->
+                                True
+
+                            Ok existingFile ->
+                                (existingFile |> Elm.Pretty.pretty 80) /= generatedTestFile
+                in
+                if testFileRequiresChanges then
+                    [ Review.Rule.errorForModuleWithFix documentationCodeSnippetTestModule.key
+                        { message = "documentation code snippet test can be added"
+                        , details =
+                            [ "Adding them will help verify that code blocks in your readme and module documentation work correctly."
+                            ]
+                        }
+                        { start = { row = 1, column = 1 }, end = { row = 1, column = 7 } }
+                        [ Review.Fix.replaceRangeBy
+                            everythingRange
+                            generatedTestFile
+                        ]
                     ]
-                ]
+
+                else
+                    []
+
+
+everythingRange : Range
+everythingRange =
+    { start = { row = 1, column = 1 }, end = { row = 1000000, column = 1 } }
 
 
 elmCodeGenTestDescribe : String -> List Elm.CodeGen.Expression -> Maybe Elm.CodeGen.Expression
@@ -1021,7 +1047,7 @@ markdownElmCodeBlocksInReadme =
 
 initialProjectContext : ProjectContext
 initialProjectContext =
-    { documentationCodeSnippetTestModuleKey = Nothing
+    { documentationCodeSnippetTestModule = Nothing
     , exposesByModule = FastDict.empty
     , codeSnippetsByModule = FastDict.empty
     , readmeCodeSnippets = []
@@ -1063,13 +1089,13 @@ projectToModuleContextCreator =
 
 projectContextsMerge : ProjectContext -> ProjectContext -> ProjectContext
 projectContextsMerge a b =
-    { documentationCodeSnippetTestModuleKey =
-        case a.documentationCodeSnippetTestModuleKey of
+    { documentationCodeSnippetTestModule =
+        case a.documentationCodeSnippetTestModule of
             Just documentationCodeSnippetTestModuleKey ->
                 documentationCodeSnippetTestModuleKey |> Just
 
             Nothing ->
-                b.documentationCodeSnippetTestModuleKey
+                b.documentationCodeSnippetTestModule
     , exposesByModule = FastDict.union a.exposesByModule b.exposesByModule
     , codeSnippetsByModule = FastDict.union a.codeSnippetsByModule b.codeSnippetsByModule
     , readmeCodeSnippets = a.readmeCodeSnippets
@@ -1079,17 +1105,18 @@ projectContextsMerge a b =
 moduleToProjectContextCreator : Review.Rule.ContextCreator ModuleContext ProjectContext
 moduleToProjectContextCreator =
     Review.Rule.initContextCreator
-        (\moduleKey moduleName moduleContext ->
+        (\moduleKey moduleName extractSourceCode moduleContext ->
             case moduleContext of
                 TestModuleContext testModuleKey ->
-                    { documentationCodeSnippetTestModuleKey = testModuleKey |> Just
+                    { documentationCodeSnippetTestModule =
+                        { key = testModuleKey, source = extractSourceCode everythingRange } |> Just
                     , exposesByModule = FastDict.empty
                     , codeSnippetsByModule = FastDict.empty
                     , readmeCodeSnippets = []
                     }
 
                 NonTestModuleContext nonTestModuleContext ->
-                    { documentationCodeSnippetTestModuleKey = Nothing
+                    { documentationCodeSnippetTestModule = Nothing
                     , exposesByModule =
                         FastDict.singleton moduleName
                             { exposedChoiceTypesExposingVariants = nonTestModuleContext.exposedChoiceTypesExposingVariants
@@ -1106,6 +1133,7 @@ moduleToProjectContextCreator =
         )
         |> Review.Rule.withModuleKey
         |> Review.Rule.withModuleName
+        |> Review.Rule.withSourceCodeExtractor
 
 
 declarationToDocumented : Declaration -> Maybe { name : String, documentation : Node String }
