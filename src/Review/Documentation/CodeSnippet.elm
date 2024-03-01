@@ -1155,7 +1155,7 @@ codeSnippetParseErrorInfo : CodeSnippetParseError -> { message : String, details
 codeSnippetParseErrorInfo =
     \codeSnippetParseError ->
         case codeSnippetParseError of
-            CodeSnippetDeclarationsAndImportsParseError ->
+            CodeSnippetDeclarationsAndImportsParseError _ ->
                 { message = "code snippet parsing failed"
                 , details =
                     [ "I expected to find syntactically valid elm code here but something is off with the imports/declarations/checked expressions."
@@ -1176,24 +1176,37 @@ codeSnippetParseErrorRangeIn : { raw : String, start : Location } -> (CodeSnippe
 codeSnippetParseErrorRangeIn documentation =
     \parseError ->
         let
-            relativeLocation : Range
-            relativeLocation =
+            relativeRange : Range
+            relativeRange =
                 case parseError of
-                    CodeSnippetDeclarationsAndImportsParseError ->
-                        { start = { row = 1, column = 1 }, end = { row = 2, column = 1 } }
+                    CodeSnippetDeclarationsAndImportsParseError fullDeclarationsAndImportsToFind ->
+                        documentation.raw
+                            |> stringRangeOfString
+                                (fullDeclarationsAndImportsToFind
+                                    |> String.split "\n"
+                                    |> List.head
+                                    -- never returned by String.split
+                                    |> Maybe.withDefault fullDeclarationsAndImportsToFind
+                                )
 
                     CodeSnippetExpectationParseError toFind ->
-                        case documentation.raw |> String.split toFind of
-                            -- never returned by String.split
-                            [] ->
-                                { start = { row = 1, column = 1 }, end = { row = 2, column = 1 } }
-
-                            beforeToFind :: _ ->
-                                toFind
-                                    |> stringRange
-                                    |> rangeFrom (beforeToFind |> stringRange |> .end)
+                        documentation.raw |> stringRangeOfString toFind
         in
-        relativeLocation |> rangeFrom documentation.start
+        relativeRange |> rangeFrom documentation.start
+
+
+stringRangeOfString : String -> (String -> Range)
+stringRangeOfString toFind =
+    \string ->
+        case string |> String.split toFind of
+            -- never returned by String.split
+            [] ->
+                { start = { row = 1, column = 1 }, end = { row = 2, column = 1 } }
+
+            beforeToFind :: _ ->
+                toFind
+                    |> stringRange
+                    |> rangeFrom (beforeToFind |> stringRange |> .end)
 
 
 stringRange : String -> Range
@@ -1251,7 +1264,7 @@ elmCodeBlockToSnippet =
             Ok split ->
                 case split.withoutChecks |> ElmSyntaxParse.importsAndDeclarations of
                     Nothing ->
-                        CodeSnippetDeclarationsAndImportsParseError |> Err
+                        CodeSnippetDeclarationsAndImportsParseError split.withoutChecks |> Err
 
                     Just importsAndDeclarations ->
                         { imports = importsAndDeclarations.imports
@@ -1342,6 +1355,7 @@ codeBlockToChunks =
 
 elmCodeBlockChunksSplitOffChecks : List String -> Result String { withoutChecks : String, checks : List CodeSnippetCheck }
 elmCodeBlockChunksSplitOffChecks chunks =
+    -- IGNORE TCO
     case chunks of
         [] ->
             { withoutChecks = "", checks = [] } |> Ok
@@ -1368,7 +1382,7 @@ elmCodeBlockChunksSplitOffChecks chunks =
                                     Just expectedExpressionSource ->
                                         case expectedExpressionSource |> ElmSyntaxParse.expression of
                                             Nothing ->
-                                                chunk1 |> Err
+                                                expectedExpressionSource |> Err
 
                                             Just expectedExpression ->
                                                 { chunk2UpSeparated
@@ -1434,4 +1448,4 @@ stringToWithoutStart start =
 
 type CodeSnippetParseError
     = CodeSnippetExpectationParseError String
-    | CodeSnippetDeclarationsAndImportsParseError
+    | CodeSnippetDeclarationsAndImportsParseError String
