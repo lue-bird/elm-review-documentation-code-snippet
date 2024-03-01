@@ -1,7 +1,7 @@
 # elm-review-documentation-code-snippet
 
 [🔧 `Review.Documentation.CodeSnippet.check`](https://package.elm-lang.org/packages/lue-bird/elm-review-documentation-example/1.0.0/Review-Documentation-CodeSnippet#check "provides fixes")
-automatically generates tests for examples in your readme and module documentation.
+automatically generates tests from the examples in your documentation (readme, module header, declaration comments).
 ```elm
 {-| `Dict.keys` but returning a `Set` instead of a `List`.
 
@@ -33,6 +33,11 @@ config =
     [ Review.Documentation.CodeSnippet.check
     ]
 ```
+I suggest running it in the background
+```noformatingples
+elm-review --rules Review.Documentation.CodeSnippet --watch --fix-all-without-prompt
+```
+and adding `tests/DocumentationCodeSnippet.Test.elm` to `.gitignore`.
 
 ## why?
 
