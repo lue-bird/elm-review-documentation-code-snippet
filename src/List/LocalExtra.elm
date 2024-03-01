@@ -1,6 +1,20 @@
-module List.LocalExtra exposing (allJustMap, firstJustMap, setUnionMap)
+module List.LocalExtra exposing (allJustMap, firstJustMap, removeLast, setUnionMap)
 
 import Set exposing (Set)
+
+
+removeLast : List a -> List a
+removeLast =
+    \list ->
+        case list of
+            [] ->
+                []
+
+            [ _ ] ->
+                []
+
+            el0 :: el1 :: el2Up ->
+                el0 :: removeLast (el1 :: el2Up)
 
 
 setUnionMap : (a -> Set comparable) -> (List a -> Set comparable)

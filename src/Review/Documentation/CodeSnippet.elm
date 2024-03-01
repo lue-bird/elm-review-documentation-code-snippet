@@ -28,7 +28,7 @@ import Elm.Syntax.TypeAnnotation
 import ElmSyntaxParse
 import Expression.LocalExtra
 import FastDict exposing (Dict)
-import Imports
+import Imports exposing (Imports)
 import List.LocalExtra
 import Origin
 import RecordWithoutConstructorFunction exposing (RecordWithoutConstructorFunction)
@@ -419,28 +419,165 @@ checkFullProject =
                 ]
 
 
+elmCodeGenTestDescribe : String -> List Elm.CodeGen.Expression -> Maybe Elm.CodeGen.Expression
+elmCodeGenTestDescribe description subTests =
+    case subTests of
+        [] ->
+            Nothing
+
+        subTest0 :: subTest1Up ->
+            Elm.CodeGen.fqConstruct [ "Test" ]
+                "describe"
+                [ Elm.CodeGen.string description
+                , Elm.CodeGen.list (subTest0 :: subTest1Up)
+                ]
+                |> Just
+
+
 createDocumentationCodeSnippetsTestFile :
     { foundDocumentationExamplesInReadme : List CodeSnippet
     , byModule :
         Dict
             Elm.Syntax.ModuleName.ModuleName
-            { moduleInfo_
-                | foundDocumentationExamplesInModuleHeader : List CodeSnippet
-                , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
+            { exposedChoiceTypesExposingVariants : Dict String (Set String)
+            , exposedValueAndFunctionAndTypeAliasNames : Set String
+            , foundDocumentationExamplesInModuleHeader : List CodeSnippet
+            , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
             }
     }
     -> Elm.CodeGen.File
 createDocumentationCodeSnippetsTestFile =
-    \info ->
-        {- TODO
-           - #location is (readme | (moduleName\_\_(header | reference name))) \_\_(code snippet index 0 based)
-           - prefix declaration names based on #location
-           - map all sub references (type, pattern, value/function) of declarations and actual and expected
-               - to fully qualified using Origin.determine
-               - if no full qualification is found, see if it's defined in `declarations` and adapt the #location name accordingly
-           - bonus: compare `.imports` with full qualifications present in all references and automatically add missing imports as a fix
-        -}
+    \infoRaw ->
         let
+            codeSnippetsFullyQualifyAndAddLocationPrefix : String -> (List CodeSnippet -> List CodeSnippet)
+            codeSnippetsFullyQualifyAndAddLocationPrefix locationPrefix =
+                \codeSnippetsRaw ->
+                    codeSnippetsRaw
+                        |> List.indexedMap
+                            (\snippetIndex codeSnippet ->
+                                codeSnippet
+                                    |> codeSnippetFullyQualifyAndAddLocationPrefix
+                                        ([ locationPrefix, "_", snippetIndex |> String.fromInt ] |> String.concat)
+                            )
+
+            exposesByModule :
+                Dict
+                    Elm.Syntax.ModuleName.ModuleName
+                    { exposedChoiceTypesExposingVariants : Dict String (Set String)
+                    , exposedValueAndFunctionAndTypeAliasNames : Set String
+                    }
+            exposesByModule =
+                infoRaw.byModule
+                    |> FastDict.map
+                        (\_ moduleInfoRaw ->
+                            { exposedChoiceTypesExposingVariants = moduleInfoRaw.exposedChoiceTypesExposingVariants
+                            , exposedValueAndFunctionAndTypeAliasNames = moduleInfoRaw.exposedValueAndFunctionAndTypeAliasNames
+                            }
+                        )
+
+            codeSnippetFullyQualifyAndAddLocationPrefix : String -> (CodeSnippet -> CodeSnippet)
+            codeSnippetFullyQualifyAndAddLocationPrefix locationPrefix =
+                \codeSnippet ->
+                    let
+                        imports : Imports
+                        imports =
+                            Imports.implicit
+                                |> Imports.insertSyntaxImports exposesByModule codeSnippet.imports
+
+                        referenceFullyQualifyAndAdaptLocationPrefix : ( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String )
+                        referenceFullyQualifyAndAdaptLocationPrefix =
+                            \( qualification, unqualifiedName ) ->
+                                case ( qualification, unqualifiedName ) |> Origin.determine imports of
+                                    [] ->
+                                        ( [], [ locationPrefix, "__", unqualifiedName ] |> String.concat )
+
+                                    moduleNamePart0 :: moduleNamePart1Up ->
+                                        ( moduleNamePart0 :: moduleNamePart1Up, unqualifiedName )
+
+                        codeSnippetCheckFullyQualify : CodeSnippetCheck -> CodeSnippetCheck
+                        codeSnippetCheckFullyQualify =
+                            \codeSnippetCheck ->
+                                { checkedExpression =
+                                    codeSnippetCheck.checkedExpression
+                                        |> Expression.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationPrefix
+                                , expectation =
+                                    case codeSnippetCheck.expectation of
+                                        Equals expectedExpression ->
+                                            expectedExpression
+                                                |> Expression.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationPrefix
+                                                |> Equals
+
+                                        IsOfType expectedType ->
+                                            expectedType
+                                                |> Type.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationPrefix
+                                                |> IsOfType
+                                }
+                    in
+                    { imports = codeSnippet.imports
+                    , declarations =
+                        codeSnippet.declarations
+                            |> List.map
+                                (\declaration ->
+                                    declaration
+                                        |> Declaration.LocalExtra.nameAlter (\name -> [ locationPrefix, "__", name ] |> String.concat)
+                                        |> Declaration.LocalExtra.subReferencesAlter referenceFullyQualifyAndAdaptLocationPrefix
+                                )
+                    , checks = codeSnippet.checks |> List.map codeSnippetCheckFullyQualify
+                    }
+
+            {-
+               - prefix declaration names based on #location
+               - map all sub references (type, pattern, value/function) of declarations and actual and expected
+                 - to fully qualified using Origin.determine
+                 - if no full qualification is found, see if it's defined in `declarations` and adapt the #location name accordingly
+            -}
+            info :
+                { foundDocumentationExamplesInReadme : List CodeSnippet
+                , byModule :
+                    Dict
+                        Elm.Syntax.ModuleName.ModuleName
+                        { foundDocumentationExamplesInModuleHeader : List CodeSnippet
+                        , foundDocumentationExamplesInMembers : Dict String (List CodeSnippet)
+                        }
+                }
+            info =
+                { foundDocumentationExamplesInReadme =
+                    infoRaw.foundDocumentationExamplesInReadme
+                        |> codeSnippetsFullyQualifyAndAddLocationPrefix "Readme"
+                , byModule =
+                    infoRaw.byModule
+                        |> FastDict.map
+                            (\moduleName moduleInfoRaw ->
+                                let
+                                    moduleNameLocationPrefix : String -> String
+                                    moduleNameLocationPrefix subName =
+                                        [ moduleName |> String.join "_", "__", subName ] |> String.concat
+
+                                    codeSnippetAddImportLocalModuleExposingAll : CodeSnippet -> CodeSnippet
+                                    codeSnippetAddImportLocalModuleExposingAll =
+                                        \codeSnippet ->
+                                            { codeSnippet
+                                                | imports =
+                                                    Elm.CodeGen.importStmt moduleName Nothing (Elm.CodeGen.exposeAll |> Just)
+                                                        :: codeSnippet.imports
+                                            }
+                                in
+                                { foundDocumentationExamplesInModuleHeader =
+                                    moduleInfoRaw.foundDocumentationExamplesInModuleHeader
+                                        |> List.map codeSnippetAddImportLocalModuleExposingAll
+                                        |> codeSnippetsFullyQualifyAndAddLocationPrefix (moduleNameLocationPrefix "Header")
+                                , foundDocumentationExamplesInMembers =
+                                    moduleInfoRaw.foundDocumentationExamplesInMembers
+                                        |> FastDict.map
+                                            (\memberName memberCodeSnippets ->
+                                                memberCodeSnippets
+                                                    |> List.map codeSnippetAddImportLocalModuleExposingAll
+                                                    |> codeSnippetsFullyQualifyAndAddLocationPrefix (moduleNameLocationPrefix memberName)
+                                            )
+                                }
+                            )
+                }
+
             declarations : List Elm.Syntax.Declaration.Declaration
             declarations =
                 (info.foundDocumentationExamplesInReadme
@@ -564,21 +701,6 @@ createDocumentationCodeSnippetsTestFile =
                 |> Elm.CodeGen.markdown "automatically generated by [elm-review-documentation-code-snippet](https://dark.elm.dmy.fr/packages/lue-bird/elm-review-documentation-code-snippet/latest)"
                 |> Just
             )
-
-
-elmCodeGenTestDescribe : String -> List Elm.CodeGen.Expression -> Maybe Elm.CodeGen.Expression
-elmCodeGenTestDescribe description subTests =
-    case subTests of
-        [] ->
-            Nothing
-
-        subTest0 :: subTest1Up ->
-            Elm.CodeGen.fqConstruct [ "Test" ]
-                "describe"
-                [ Elm.CodeGen.string description
-                , Elm.CodeGen.list (subTest0 :: subTest1Up)
-                ]
-                |> Just
 
 
 codeSnippetsToTestWithName : String -> List CodeSnippet -> Maybe Elm.CodeGen.Expression
@@ -751,84 +873,68 @@ moduleDocsValueAndFunctionAndTypeAliasNames =
 markdownElmCodeBlocksInModule : String -> List String
 markdownElmCodeBlocksInModule =
     \readmeString ->
-        case readmeString |> RoughMarkdown.parse of
-            Err _ ->
-                let
-                    _ =
-                        Debug.log "rough markdown parsing failed" ()
-                in
+        readmeString
+            |> RoughMarkdown.parse
+            |> RoughMarkdown.foldl
+                (\markdownBlock soFar ->
+                    case markdownBlock of
+                        RoughMarkdown.UnorderedList _ _ ->
+                            soFar
+
+                        RoughMarkdown.OrderedList _ _ _ ->
+                            soFar
+
+                        RoughMarkdown.Paragraph _ ->
+                            soFar
+
+                        RoughMarkdown.CodeBlock codeBlock ->
+                            case codeBlock.language of
+                                Nothing ->
+                                    soFar |> (::) codeBlock.body
+
+                                Just "elm" ->
+                                    soFar |> (::) codeBlock.body
+
+                                Just "" ->
+                                    soFar |> (::) codeBlock.body
+
+                                Just _ ->
+                                    soFar
+                )
                 []
-
-            Ok markdownBlocks ->
-                markdownBlocks
-                    |> RoughMarkdown.foldl
-                        (\markdownBlock soFar ->
-                            case markdownBlock of
-                                RoughMarkdown.UnorderedList _ _ ->
-                                    soFar
-
-                                RoughMarkdown.OrderedList _ _ _ ->
-                                    soFar
-
-                                RoughMarkdown.Paragraph _ ->
-                                    soFar
-
-                                RoughMarkdown.CodeBlock codeBlock ->
-                                    case codeBlock.language of
-                                        Nothing ->
-                                            soFar |> (::) codeBlock.body
-
-                                        Just "elm" ->
-                                            soFar |> (::) codeBlock.body
-
-                                        Just "" ->
-                                            soFar |> (::) codeBlock.body
-
-                                        Just _ ->
-                                            soFar
-                        )
-                        []
-                    |> List.reverse
+            |> List.reverse
 
 
 markdownElmCodeBlocksInReadme : String -> List String
 markdownElmCodeBlocksInReadme =
     \documentationString ->
-        case documentationString |> RoughMarkdown.parse of
-            Err _ ->
-                let
-                    _ =
-                        Debug.log "rough markdown parsing failed" ()
-                in
+        documentationString
+            |> RoughMarkdown.parse
+            |> RoughMarkdown.foldl
+                (\markdownBlock soFar ->
+                    case markdownBlock of
+                        RoughMarkdown.UnorderedList _ _ ->
+                            soFar
+
+                        RoughMarkdown.OrderedList _ _ _ ->
+                            soFar
+
+                        RoughMarkdown.Paragraph _ ->
+                            soFar
+
+                        RoughMarkdown.CodeBlock codeBlock ->
+                            case codeBlock.language of
+                                Nothing ->
+                                    soFar
+
+                                Just "elm" ->
+                                    soFar |> (::) codeBlock.body
+
+                                Just _ ->
+                                    soFar
+                )
                 []
-
-            Ok markdownBlocks ->
-                markdownBlocks
-                    |> RoughMarkdown.foldl
-                        (\markdownBlock soFar ->
-                            case markdownBlock of
-                                RoughMarkdown.UnorderedList _ _ ->
-                                    soFar
-
-                                RoughMarkdown.OrderedList _ _ _ ->
-                                    soFar
-
-                                RoughMarkdown.Paragraph _ ->
-                                    soFar
-
-                                RoughMarkdown.CodeBlock codeBlock ->
-                                    case codeBlock.language of
-                                        Nothing ->
-                                            soFar
-
-                                        Just "elm" ->
-                                            soFar |> (::) codeBlock.body
-
-                                        Just _ ->
-                                            soFar
-                        )
-                        []
-                    |> List.reverse
+            |> List.reverse
 
 
 initialProjectContext : ProjectContext
@@ -977,6 +1083,31 @@ elmCodeBlockToSnippet =
                     |> Just
 
 
+elmCodeBlockLinesSplitOffChecks : String -> { withoutChecks : String, checks : List CodeSnippetCheck }
+elmCodeBlockLinesSplitOffChecks =
+    \elmCodeBlock ->
+        let
+            chunkSplitAt : String -> (String -> List String)
+            chunkSplitAt mark =
+                \chunk ->
+                    case chunk |> String.split mark of
+                        -- can't happen
+                        [] ->
+                            [ chunk ]
+
+                        [ onlyChunk ] ->
+                            [ onlyChunk ]
+
+                        realChunk0 :: realChunk1 :: realChunk2Up ->
+                            [ realChunk0, mark ++ ((realChunk1 :: realChunk2Up) |> String.join mark) ]
+        in
+        elmCodeBlock
+            |> codeBlockToChunks
+            |> List.concatMap (chunkSplitAt "-->")
+            |> List.concatMap (chunkSplitAt "--:")
+            |> elmCodeBlockChunksSplitOffChecks
+
+
 {-| A chunk is opened by an unindented line and only closed by a blank line
 -}
 codeBlockToChunks : String -> List String
@@ -1029,31 +1160,6 @@ codeBlockToChunks =
             |> .chunks
             |> List.reverse
             |> List.map .content
-
-
-elmCodeBlockLinesSplitOffChecks : String -> { withoutChecks : String, checks : List CodeSnippetCheck }
-elmCodeBlockLinesSplitOffChecks =
-    \elmCodeBlock ->
-        let
-            chunkSplitAt : String -> (String -> List String)
-            chunkSplitAt mark =
-                \chunk ->
-                    case chunk |> String.split mark of
-                        -- can't happen
-                        [] ->
-                            [ chunk ]
-
-                        [ onlyChunk ] ->
-                            [ onlyChunk ]
-
-                        realChunk0 :: realChunk1 :: realChunk2Up ->
-                            [ realChunk0, mark ++ ((realChunk1 :: realChunk2Up) |> String.join mark) ]
-        in
-        elmCodeBlock
-            |> codeBlockToChunks
-            |> List.concatMap (chunkSplitAt "-->")
-            |> List.concatMap (chunkSplitAt "--:")
-            |> elmCodeBlockChunksSplitOffChecks
 
 
 elmCodeBlockChunksSplitOffChecks : List String -> { withoutChecks : String, checks : List CodeSnippetCheck }

@@ -137,23 +137,24 @@ colToIndentation int =
 infoString : FenceCharacterConfig -> Parser (Maybe String)
 infoString fenceCharacter =
     let
-        toInfoString : String -> b -> Maybe String
-        toInfoString str _ =
-            case String.trim str of
-                "" ->
-                    Nothing
+        toInfoString : String -> Maybe String
+        toInfoString =
+            \string ->
+                case string |> String.trim of
+                    "" ->
+                        Nothing
 
-                trimmed ->
-                    Just trimmed
+                    trimmed ->
+                        Just trimmed
     in
     case fenceCharacter.kind of
         Backtick ->
-            Parser.Advanced.chompWhile (\c -> c /= '`' && not (Char.LocalExtra.isLineEnd c))
-                |> Parser.Advanced.mapChompedString toInfoString
+            Parser.Advanced.chompWhile (\c -> not (c |> Char.LocalExtra.isBacktick) && not (Char.LocalExtra.isLineEnd c))
+                |> Parser.Advanced.mapChompedString (\str _ -> str |> toInfoString)
 
         Tilde ->
             Parser.Advanced.chompWhile (\c -> not (c |> Char.LocalExtra.isLineEnd))
-                |> Parser.Advanced.mapChompedString toInfoString
+                |> Parser.Advanced.mapChompedString (\str _ -> str |> toInfoString)
 
 
 
@@ -211,7 +212,7 @@ closingFence minLength fenceCharacter =
     Parser.Advanced.succeed ()
         |. Parser.LocalExtra.upToThreeSpaces
         |. fenceOfAtLeast minLength fenceCharacter
-        |. Parser.Advanced.chompWhile (\c -> c == ' ')
+        |. Parser.Advanced.chompWhile Char.LocalExtra.isSpace
         |. Parser.LocalExtra.lineEndOrEnd
 
 

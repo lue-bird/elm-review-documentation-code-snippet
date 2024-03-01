@@ -1,18 +1,16 @@
-module Type.LocalExtra exposing (fullyQualify, nodeReferences, usedModules)
+module Type.LocalExtra exposing (nodeReferences, referencesAlter, usedModules)
 
 import Elm.Syntax.ModuleName
 import Elm.Syntax.Node exposing (Node(..))
 import Elm.Syntax.TypeAnnotation
-import Imports exposing (Imports)
 import List.LocalExtra
-import Origin
 import Set exposing (Set)
 
 
-fullyQualify :
-    Imports
+referencesAlter :
+    (( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String ))
     -> (Elm.Syntax.TypeAnnotation.TypeAnnotation -> Elm.Syntax.TypeAnnotation.TypeAnnotation)
-fullyQualify resources =
+referencesAlter referenceAlter =
     \type_ ->
         type_
             |> map
@@ -23,9 +21,7 @@ fullyQualify resources =
                                 (nameNode
                                     |> Elm.Syntax.Node.map
                                         (\( moduleName, unqualifiedName ) ->
-                                            ( ( moduleName, unqualifiedName ) |> Origin.determine resources
-                                            , unqualifiedName
-                                            )
+                                            ( moduleName, unqualifiedName ) |> referenceAlter
                                         )
                                 )
                                 arguments

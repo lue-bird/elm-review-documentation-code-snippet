@@ -6,6 +6,7 @@ import Elm.Syntax.Expression exposing (Expression)
 import Elm.Syntax.Import exposing (Import)
 import Elm.Syntax.Node
 import Elm.Syntax.TypeAnnotation
+import List.LocalExtra
 
 
 importsAndDeclarationsDiscardingModuleHeader : String -> Maybe { imports : List Import, declarations : List Declaration }
@@ -15,7 +16,7 @@ importsAndDeclarationsDiscardingModuleHeader =
         case rawSourceCode ++ "\na = a" |> Elm.Parser.parseToFile of
             Ok file ->
                 { imports = file.imports |> List.map Elm.Syntax.Node.value
-                , declarations = file.declarations |> List.drop 1 |> List.map Elm.Syntax.Node.value
+                , declarations = file.declarations |> List.LocalExtra.removeLast |> List.map Elm.Syntax.Node.value
                 }
                     |> Just
 

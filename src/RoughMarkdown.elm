@@ -152,33 +152,31 @@ But you can also do a lot with the `Block`s before passing them through:
   - Use the blocks to gather metadata about the markdown document ([example: building a table of contents from `Block`s](https://ellie-app.com/cHB3fRSKVRha1))
 
 -}
-parse : String -> Result (List (Parser.Advanced.DeadEnd String Parser.Problem)) (List Block)
+parse : String -> List Block
 parse input =
     -- first parse the file as raw blocks
     case Parser.Advanced.run (rawBlockParser |. Parser.LocalExtra.endOfFile) input of
-        Err e ->
-            Err e
+        Err _ ->
+            [ input |> Paragraph ]
 
         Ok v ->
             -- then parse the inlines of each raw block
             case parseAllInlines v of
                 Err e ->
                     Parser.Advanced.run (Parser.Advanced.problem e) ""
+                        |> Result.withDefault [ input |> Paragraph ]
 
                 Ok blocks ->
-                    let
-                        -- find a better way to do this
-                        -- e.g. make sure they are never generated
-                        isNotEmptyParagraph : Block -> Bool
-                        isNotEmptyParagraph block =
-                            case block of
-                                Paragraph "" ->
-                                    False
+                    blocks
+                        |> List.filterMap
+                            (\block ->
+                                case block of
+                                    Paragraph "" ->
+                                        Nothing
 
-                                _ ->
-                                    True
-                    in
-                    Ok (List.filter isNotEmptyParagraph blocks)
+                                    notEmptyParagraph ->
+                                        notEmptyParagraph |> Just
+                            )
 
 
 type alias Parser a =
@@ -879,7 +877,7 @@ thisIsDefinitelyNotAnHtmlTag =
         [ token (Parser.Advanced.Token " " (Parser.Expecting " "))
         , token (Parser.Advanced.Token ">" (Parser.Expecting ">"))
         , chompIf Char.isAlpha (Parser.Expecting "Alpha")
-            |. chompWhile (\c -> Char.isAlphaNum c || c == '-')
+            |. chompWhile (\c -> (c |> Char.isAlphaNum) || (c |> Char.LocalExtra.isHyphen))
             |. oneOf
                 [ token (Parser.Advanced.Token ":" (Parser.Expecting ":"))
                 , token (Parser.Advanced.Token "@" (Parser.Expecting "@"))

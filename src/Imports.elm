@@ -134,13 +134,13 @@ insertSyntaxImports :
         { exposedChoiceTypesExposingVariants : Dict String (Set String)
         , exposedValueAndFunctionAndTypeAliasNames : Set String
         }
-    -> List (Node Elm.Syntax.Import.Import)
+    -> List Elm.Syntax.Import.Import
     -> Imports
     -> Imports
 insertSyntaxImports byModule syntaxImports =
     \imports ->
         List.foldl
-            (\(Node _ import_) importsSoFar ->
+            (\import_ importsSoFar ->
                 let
                     moduleName : Elm.Syntax.ModuleName.ModuleName
                     moduleName =

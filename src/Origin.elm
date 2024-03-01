@@ -1,7 +1,7 @@
 module Origin exposing (determine)
 
 import Elm.Syntax.ModuleName
-import FastDict exposing (Dict)
+import FastDict
 import FastDict.LocalExtra
 import Imports exposing (Imports)
 import Set
@@ -38,13 +38,28 @@ determine imports =
                         aliasOriginModuleName
 
                     Nothing ->
-                        imports
-                            |> FastDict.LocalExtra.firstJustMap
-                                (\importModuleName import_ ->
-                                    if import_.exposed |> Set.member unqualifiedName then
-                                        importModuleName |> Just
+                        case qualification of
+                            [] ->
+                                let
+                                    maybeOriginByExpose : Maybe Elm.Syntax.ModuleName.ModuleName
+                                    maybeOriginByExpose =
+                                        imports
+                                            |> FastDict.LocalExtra.firstJustMap
+                                                (\importModuleName import_ ->
+                                                    if import_.exposed |> Set.member unqualifiedName then
+                                                        importModuleName |> Just
 
-                                    else
-                                        Nothing
-                                )
-                            |> Maybe.withDefault qualification
+                                                    else
+                                                        Nothing
+                                                )
+                                in
+                                case maybeOriginByExpose of
+                                    Just moduleName ->
+                                        moduleName
+
+                                    Nothing ->
+                                        -- defined branch-locally (pattern variable or let declared)
+                                        []
+
+                            moduleNamePart0 :: moduleNamePart1 ->
+                                moduleNamePart0 :: moduleNamePart1

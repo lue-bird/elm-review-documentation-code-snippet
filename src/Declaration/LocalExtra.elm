@@ -1,18 +1,89 @@
-module Declaration.LocalExtra exposing (fullyQualify, usedModules)
+module Declaration.LocalExtra exposing (nameAlter, subReferencesAlter, usedModules)
 
 import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.ModuleName
 import Elm.Syntax.Node exposing (Node(..))
 import Expression.LocalExtra
-import Imports exposing (Imports)
 import List.LocalExtra
 import Pattern.LocalExtra
 import Set exposing (Set)
 import Type.LocalExtra
 
 
-fullyQualify : Imports -> (Declaration -> Declaration)
-fullyQualify imports =
+nameAlter : (String -> String) -> (Declaration -> Declaration)
+nameAlter nameChange =
+    \declaration ->
+        case declaration of
+            Elm.Syntax.Declaration.FunctionDeclaration functionDeclaration ->
+                Elm.Syntax.Declaration.FunctionDeclaration
+                    { signature =
+                        functionDeclaration.signature
+                            |> Maybe.map
+                                (Elm.Syntax.Node.map
+                                    (\signature ->
+                                        { name = signature.name |> Elm.Syntax.Node.map nameChange
+                                        , typeAnnotation = signature.typeAnnotation
+                                        }
+                                    )
+                                )
+                    , documentation = functionDeclaration.documentation
+                    , declaration =
+                        functionDeclaration.declaration
+                            |> Elm.Syntax.Node.map
+                                (\implementation ->
+                                    { name = implementation.name |> Elm.Syntax.Node.map nameChange
+                                    , arguments = implementation.arguments
+                                    , expression = implementation.expression
+                                    }
+                                )
+                    }
+
+            Elm.Syntax.Declaration.AliasDeclaration typeAliasDeclaration ->
+                Elm.Syntax.Declaration.AliasDeclaration
+                    { name = typeAliasDeclaration.name |> Elm.Syntax.Node.map nameChange
+                    , documentation = typeAliasDeclaration.documentation
+                    , generics = typeAliasDeclaration.generics
+                    , typeAnnotation = typeAliasDeclaration.typeAnnotation
+                    }
+
+            Elm.Syntax.Declaration.CustomTypeDeclaration variantType ->
+                Elm.Syntax.Declaration.CustomTypeDeclaration
+                    { name = variantType.name |> Elm.Syntax.Node.map nameChange
+                    , documentation = variantType.documentation
+                    , generics = variantType.generics
+                    , constructors =
+                        variantType.constructors
+                            |> List.map
+                                (\variantNode ->
+                                    variantNode
+                                        |> Elm.Syntax.Node.map
+                                            (\variant ->
+                                                { name = variant.name |> Elm.Syntax.Node.map nameChange
+                                                , arguments = variant.arguments
+                                                }
+                                            )
+                                )
+                    }
+
+            Elm.Syntax.Declaration.PortDeclaration signature ->
+                Elm.Syntax.Declaration.PortDeclaration
+                    { name = signature.name |> Elm.Syntax.Node.map nameChange
+                    , typeAnnotation = signature.typeAnnotation
+                    }
+
+            -- not supported
+            Elm.Syntax.Declaration.InfixDeclaration infixDeclaration ->
+                Elm.Syntax.Declaration.InfixDeclaration infixDeclaration
+
+            -- invalid
+            Elm.Syntax.Declaration.Destructuring pattern toDestructure ->
+                Elm.Syntax.Declaration.Destructuring pattern toDestructure
+
+
+subReferencesAlter :
+    (( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String ))
+    -> (Declaration -> Declaration)
+subReferencesAlter referenceAlter =
     \declaration ->
         case declaration of
             Elm.Syntax.Declaration.FunctionDeclaration functionDeclaration ->
@@ -27,7 +98,7 @@ fullyQualify imports =
                                         , typeAnnotation =
                                             signature.typeAnnotation
                                                 |> Elm.Syntax.Node.map
-                                                    (Type.LocalExtra.fullyQualify imports)
+                                                    (Type.LocalExtra.referencesAlter referenceAlter)
                                         }
                                     )
                                 )
@@ -38,10 +109,10 @@ fullyQualify imports =
                                     { name = implementation.name
                                     , arguments =
                                         implementation.arguments
-                                            |> List.map (Elm.Syntax.Node.map (Pattern.LocalExtra.fullyQualify imports))
+                                            |> List.map (Elm.Syntax.Node.map (Pattern.LocalExtra.referencesAlter referenceAlter))
                                     , expression =
                                         implementation.expression
-                                            |> Elm.Syntax.Node.map (Expression.LocalExtra.fullyQualify imports)
+                                            |> Elm.Syntax.Node.map (Expression.LocalExtra.referencesAlter referenceAlter)
                                     }
                                 )
                     }
@@ -53,7 +124,7 @@ fullyQualify imports =
                     , generics = typeAliasDeclaration.generics
                     , typeAnnotation =
                         typeAliasDeclaration.typeAnnotation
-                            |> Elm.Syntax.Node.map (Type.LocalExtra.fullyQualify imports)
+                            |> Elm.Syntax.Node.map (Type.LocalExtra.referencesAlter referenceAlter)
                     }
 
             Elm.Syntax.Declaration.CustomTypeDeclaration variantType ->
@@ -68,10 +139,10 @@ fullyQualify imports =
                                     variantNode
                                         |> Elm.Syntax.Node.map
                                             (\variant ->
-                                                { variant
-                                                    | arguments =
-                                                        variant.arguments
-                                                            |> List.map (Elm.Syntax.Node.map (Type.LocalExtra.fullyQualify imports))
+                                                { name = variant.name
+                                                , arguments =
+                                                    variant.arguments
+                                                        |> List.map (Elm.Syntax.Node.map (Type.LocalExtra.referencesAlter referenceAlter))
                                                 }
                                             )
                                 )
@@ -79,10 +150,10 @@ fullyQualify imports =
 
             Elm.Syntax.Declaration.PortDeclaration signature ->
                 Elm.Syntax.Declaration.PortDeclaration
-                    { signature
-                        | typeAnnotation =
-                            signature.typeAnnotation
-                                |> Elm.Syntax.Node.map (Type.LocalExtra.fullyQualify imports)
+                    { name = signature.name
+                    , typeAnnotation =
+                        signature.typeAnnotation
+                            |> Elm.Syntax.Node.map (Type.LocalExtra.referencesAlter referenceAlter)
                     }
 
             -- not supported
@@ -139,7 +210,7 @@ references =
                         (\attachmentType -> attachmentType |> Type.LocalExtra.nodeReferences)
 
             Elm.Syntax.Declaration.PortDeclaration signature ->
-                Debug.todo ""
+                signature.typeAnnotation |> Type.LocalExtra.nodeReferences
 
             -- not supported
             Elm.Syntax.Declaration.InfixDeclaration _ ->

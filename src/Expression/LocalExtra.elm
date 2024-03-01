@@ -1,31 +1,33 @@
-module Expression.LocalExtra exposing (fullyQualify, references, usedModules)
+module Expression.LocalExtra exposing (references, referencesAlter, usedModules)
 
 import Elm.Syntax.Expression exposing (Expression)
 import Elm.Syntax.ModuleName
 import Elm.Syntax.Node exposing (Node(..))
-import Imports exposing (Imports)
 import List.LocalExtra
-import Origin
 import Pattern.LocalExtra
 import Set exposing (Set)
 import Type.LocalExtra
 
 
-fullyQualify : Imports -> (Expression -> Expression)
-fullyQualify imports =
+referencesAlter :
+    (( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String ))
+    -> (Expression -> Expression)
+referencesAlter referenceAlter =
     \expression ->
         expression
             |> map
                 (\innerExpression ->
                     case innerExpression of
                         Elm.Syntax.Expression.FunctionOrValue qualification unqualifiedName ->
-                            Elm.Syntax.Expression.FunctionOrValue
-                                (( qualification, unqualifiedName ) |> Origin.determine imports)
-                                unqualifiedName
+                            let
+                                ( qualificationAltered, unqualifiedNameAltered ) =
+                                    ( qualification, unqualifiedName ) |> referenceAlter
+                            in
+                            Elm.Syntax.Expression.FunctionOrValue qualificationAltered unqualifiedNameAltered
 
                         Elm.Syntax.Expression.LambdaExpression lambda ->
                             Elm.Syntax.Expression.LambdaExpression
-                                { args = lambda.args |> List.map (Elm.Syntax.Node.map (Pattern.LocalExtra.fullyQualify imports))
+                                { args = lambda.args |> List.map (Elm.Syntax.Node.map (Pattern.LocalExtra.referencesAlter referenceAlter))
                                 , expression = lambda.expression
                                 }
 
@@ -36,7 +38,7 @@ fullyQualify imports =
                                     caseOf.cases
                                         |> List.map
                                             (\( patternNode, expressionNode ) ->
-                                                ( patternNode |> Elm.Syntax.Node.map (Pattern.LocalExtra.fullyQualify imports)
+                                                ( patternNode |> Elm.Syntax.Node.map (Pattern.LocalExtra.referencesAlter referenceAlter)
                                                 , expressionNode
                                                 )
                                             )
@@ -53,7 +55,7 @@ fullyQualify imports =
                                                     case letDeclaration of
                                                         Elm.Syntax.Expression.LetDestructuring patternNode expressionNode ->
                                                             Elm.Syntax.Expression.LetDestructuring
-                                                                (patternNode |> Elm.Syntax.Node.map (Pattern.LocalExtra.fullyQualify imports))
+                                                                (patternNode |> Elm.Syntax.Node.map (Pattern.LocalExtra.referencesAlter referenceAlter))
                                                                 expressionNode
 
                                                         Elm.Syntax.Expression.LetFunction letValueOrFunctionDeclaration ->
@@ -71,7 +73,7 @@ fullyQualify imports =
                                                                                         { name = signature.name
                                                                                         , typeAnnotation =
                                                                                             signature.typeAnnotation
-                                                                                                |> Elm.Syntax.Node.map (Type.LocalExtra.fullyQualify imports)
+                                                                                                |> Elm.Syntax.Node.map (Type.LocalExtra.referencesAlter referenceAlter)
                                                                                         }
                                                                                     )
                                                                                 |> Just
@@ -83,7 +85,7 @@ fullyQualify imports =
                                                                                 , name = declaration.name
                                                                                 , arguments =
                                                                                     declaration.arguments
-                                                                                        |> List.map (Elm.Syntax.Node.map (Pattern.LocalExtra.fullyQualify imports))
+                                                                                        |> List.map (Elm.Syntax.Node.map (Pattern.LocalExtra.referencesAlter referenceAlter))
                                                                                 }
                                                                             )
                                                                 }

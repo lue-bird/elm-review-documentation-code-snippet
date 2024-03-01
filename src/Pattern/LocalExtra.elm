@@ -1,27 +1,30 @@
-module Pattern.LocalExtra exposing (fullyQualify, nodeReferences, references)
+module Pattern.LocalExtra exposing (nodeReferences, references, referencesAlter)
 
 import Elm.Syntax.ModuleName
 import Elm.Syntax.Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern)
-import Imports exposing (Imports)
 import List.LocalExtra
-import Origin
 import Set exposing (Set)
 
 
-fullyQualify : Imports -> (Pattern -> Pattern)
-fullyQualify resources =
+referencesAlter :
+    (( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String ))
+    -> (Pattern -> Pattern)
+referencesAlter referenceAlter =
     \pattern ->
         pattern
             |> map
                 (\innerPattern ->
                     case innerPattern of
                         Elm.Syntax.Pattern.NamedPattern fullyQualified arguments ->
-                            Elm.Syntax.Pattern.NamedPattern
-                                { name = fullyQualified.name
-                                , moduleName =
+                            let
+                                ( qualificationAltered, unqualifiedNameAltered ) =
                                     ( fullyQualified.moduleName, fullyQualified.name )
-                                        |> Origin.determine resources
+                                        |> referenceAlter
+                            in
+                            Elm.Syntax.Pattern.NamedPattern
+                                { name = unqualifiedNameAltered
+                                , moduleName = qualificationAltered
                                 }
                                 arguments
 
