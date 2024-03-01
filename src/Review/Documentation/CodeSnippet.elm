@@ -24,6 +24,7 @@ import Elm.Syntax.Import
 import Elm.Syntax.Module
 import Elm.Syntax.ModuleName
 import Elm.Syntax.Node exposing (Node(..))
+import Elm.Syntax.Range exposing (Location, Range)
 import Elm.Syntax.TypeAnnotation
 import ElmSyntaxParse
 import Expression.LocalExtra
@@ -84,7 +85,8 @@ type ModuleContext
 
 type alias NonTestModuleContext =
     RecordWithoutConstructorFunction
-        { exposingKind : ExposingKind
+        { extractSourceCode : Range -> String
+        , exposingKind : ExposingKind
         , exposedValueAndFunctionAndTypeAliasNames : Set String
         , exposedChoiceTypesExposingVariants : Dict String (Set String)
         , headerCodeSnippets : List CodeSnippet
@@ -259,19 +261,40 @@ check =
         |> Review.Rule.providesFixesForProjectRule
         |> Review.Rule.withReadmeProjectVisitor
             (\maybeReadme context ->
-                ( []
-                , case maybeReadme of
+                case maybeReadme of
                     Nothing ->
-                        context
+                        ( [], context )
 
                     Just readme ->
-                        { context
-                            | readmeCodeSnippets =
-                                readme.content
-                                    |> markdownElmCodeBlocksInReadme
-                                    |> List.filterMap elmCodeBlockToSnippet
-                        }
-                )
+                        let
+                            codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
+                            codeSnippetsAndErrors =
+                                readme.content |> markdownElmCodeBlocksInReadme |> List.map elmCodeBlockToSnippet
+                        in
+                        ( codeSnippetsAndErrors
+                            |> List.filterMap
+                                (\result ->
+                                    case result of
+                                        Err error ->
+                                            error |> Just
+
+                                        Ok _ ->
+                                            Nothing
+                                )
+                            |> List.map
+                                (\error ->
+                                    Review.Rule.errorForReadme
+                                        readme.readmeKey
+                                        (error |> codeSnippetParseErrorInfo)
+                                        (error
+                                            |> codeSnippetParseErrorRangeIn
+                                                { raw = readme.content, start = { row = 1, column = 1 } }
+                                        )
+                                )
+                        , { context
+                            | readmeCodeSnippets = codeSnippetsAndErrors |> List.filterMap Result.toMaybe
+                          }
+                        )
             )
         |> Review.Rule.withDirectDependenciesProjectVisitor
             (\dependencyDocsDict context ->
@@ -341,6 +364,52 @@ check =
                                         |> NonTestModuleContext
                             )
                         )
+                    |> Review.Rule.withCommentsVisitor
+                        (\comments context ->
+                            case context of
+                                TestModuleContext testModuleContext ->
+                                    ( [], testModuleContext |> TestModuleContext )
+
+                                NonTestModuleContext nonTestModuleContext ->
+                                    case comments |> List.LocalExtra.firstJustMap (commentToModuleHeader nonTestModuleContext) of
+                                        -- no module header documentation
+                                        Nothing ->
+                                            ( [], nonTestModuleContext |> NonTestModuleContext )
+
+                                        Just moduleHeaderDocumentation ->
+                                            let
+                                                codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
+                                                codeSnippetsAndErrors =
+                                                    moduleHeaderDocumentation |> Elm.Syntax.Node.value |> markdownElmCodeBlocksInModule |> List.map elmCodeBlockToSnippet
+                                            in
+                                            ( codeSnippetsAndErrors
+                                                |> List.filterMap
+                                                    (\result ->
+                                                        case result of
+                                                            Err error ->
+                                                                error |> Just
+
+                                                            Ok _ ->
+                                                                Nothing
+                                                    )
+                                                |> List.map
+                                                    (\error ->
+                                                        Review.Rule.error
+                                                            (error |> codeSnippetParseErrorInfo)
+                                                            (error
+                                                                |> codeSnippetParseErrorRangeIn
+                                                                    { raw = moduleHeaderDocumentation |> Elm.Syntax.Node.value
+                                                                    , start = moduleHeaderDocumentation |> Elm.Syntax.Node.range |> .start
+                                                                    }
+                                                            )
+                                                    )
+                                            , { nonTestModuleContext
+                                                | headerCodeSnippets =
+                                                    codeSnippetsAndErrors |> List.filterMap Result.toMaybe
+                                              }
+                                                |> NonTestModuleContext
+                                            )
+                        )
                     |> Review.Rule.withDeclarationListVisitor
                         (\declarations context ->
                             ( []
@@ -354,28 +423,50 @@ check =
                         )
                     |> Review.Rule.withDeclarationEnterVisitor
                         (\(Node _ declaration) context ->
-                            ( []
-                            , case context of
+                            case context of
                                 TestModuleContext testModuleContext ->
-                                    testModuleContext |> TestModuleContext
+                                    ( [], testModuleContext |> TestModuleContext )
 
                                 NonTestModuleContext nonTestModuleContext ->
                                     case declaration |> declarationToDocumented of
                                         Nothing ->
-                                            nonTestModuleContext |> NonTestModuleContext
+                                            ( [], nonTestModuleContext |> NonTestModuleContext )
 
                                         Just memberDocumented ->
-                                            { nonTestModuleContext
+                                            let
+                                                codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
+                                                codeSnippetsAndErrors =
+                                                    memberDocumented.documentation |> Elm.Syntax.Node.value |> markdownElmCodeBlocksInModule |> List.map elmCodeBlockToSnippet
+                                            in
+                                            ( codeSnippetsAndErrors
+                                                |> List.filterMap
+                                                    (\result ->
+                                                        case result of
+                                                            Err error ->
+                                                                error |> Just
+
+                                                            Ok _ ->
+                                                                Nothing
+                                                    )
+                                                |> List.map
+                                                    (\error ->
+                                                        Review.Rule.error
+                                                            (error |> codeSnippetParseErrorInfo)
+                                                            (error
+                                                                |> codeSnippetParseErrorRangeIn
+                                                                    { raw = memberDocumented.documentation |> Elm.Syntax.Node.value
+                                                                    , start = memberDocumented.documentation |> Elm.Syntax.Node.range |> .start
+                                                                    }
+                                                            )
+                                                    )
+                                            , { nonTestModuleContext
                                                 | codeSnippetsByMember =
                                                     nonTestModuleContext.codeSnippetsByMember
                                                         |> FastDict.insert memberDocumented.name
-                                                            (memberDocumented.documentation
-                                                                |> markdownElmCodeBlocksInModule
-                                                                |> List.filterMap elmCodeBlockToSnippet
-                                                            )
-                                            }
+                                                            (codeSnippetsAndErrors |> List.filterMap Result.toMaybe)
+                                              }
                                                 |> NonTestModuleContext
-                            )
+                                            )
                         )
             )
         |> Review.Rule.withContextFromImportedModules
@@ -386,6 +477,26 @@ check =
             }
         |> Review.Rule.withFinalProjectEvaluation checkFullProject
         |> Review.Rule.fromProjectRuleSchema
+
+
+commentToModuleHeader : { resources_ | extractSourceCode : Range -> String } -> (Node String -> Maybe (Node String))
+commentToModuleHeader resources =
+    \(Node commentRange comment) ->
+        if comment |> String.startsWith "{-|" then
+            case
+                { start = { row = commentRange.end.row + 1, column = 1 }
+                , end = { row = commentRange.end.row + 1, column = 4 }
+                }
+                    |> resources.extractSourceCode
+            of
+                "port" ->
+                    Nothing
+
+                _ ->
+                    Just (Elm.Syntax.Node.Node commentRange comment)
+
+        else
+            Nothing
 
 
 checkFullProject : ProjectContext -> List (Review.Rule.Error { useErrorForModule : () })
@@ -920,7 +1031,7 @@ initialProjectContext =
 projectToModuleContextCreator : Review.Rule.ContextCreator ProjectContext ModuleContext
 projectToModuleContextCreator =
     Review.Rule.initContextCreator
-        (\moduleKey moduleName fullAst _ ->
+        (\moduleKey moduleName extractSourceCode fullAst _ ->
             case moduleName of
                 [ "DocumentationCodeSnippet", "Test" ] ->
                     moduleKey |> TestModuleContext
@@ -931,7 +1042,8 @@ projectToModuleContextCreator =
                         exposingInfo =
                             fullAst.moduleDefinition |> Elm.Syntax.Node.value |> moduleHeaderExposed
                     in
-                    { exposingKind = exposingInfo.kind
+                    { extractSourceCode = extractSourceCode
+                    , exposingKind = exposingInfo.kind
                     , exposedChoiceTypesExposingVariants =
                         exposingInfo.exposedChoiceTypesExposingVariants
                             |> Set.toList
@@ -945,6 +1057,7 @@ projectToModuleContextCreator =
         )
         |> Review.Rule.withModuleKey
         |> Review.Rule.withModuleName
+        |> Review.Rule.withSourceCodeExtractor
         |> Review.Rule.withFullAst
 
 
@@ -995,7 +1108,7 @@ moduleToProjectContextCreator =
         |> Review.Rule.withModuleName
 
 
-declarationToDocumented : Declaration -> Maybe { name : String, documentation : String }
+declarationToDocumented : Declaration -> Maybe { name : String, documentation : Node String }
 declarationToDocumented declaration =
     case declaration of
         Elm.Syntax.Declaration.FunctionDeclaration valueOrFunctionDeclaration ->
@@ -1003,7 +1116,7 @@ declarationToDocumented declaration =
                 |> Maybe.map
                     (\documentation ->
                         { name = valueOrFunctionDeclaration.declaration |> Elm.Syntax.Node.value |> .name |> Elm.Syntax.Node.value
-                        , documentation = documentation |> Elm.Syntax.Node.value
+                        , documentation = documentation
                         }
                     )
 
@@ -1012,7 +1125,7 @@ declarationToDocumented declaration =
                 |> Maybe.map
                     (\documentation ->
                         { name = typeAliasDeclaration.name |> Elm.Syntax.Node.value
-                        , documentation = documentation |> Elm.Syntax.Node.value
+                        , documentation = documentation
                         }
                     )
 
@@ -1021,7 +1134,7 @@ declarationToDocumented declaration =
                 |> Maybe.map
                     (\documentation ->
                         { name = choiceTypeDeclaration.name |> Elm.Syntax.Node.value
-                        , documentation = documentation |> Elm.Syntax.Node.value
+                        , documentation = documentation
                         }
                     )
 
@@ -1038,32 +1151,118 @@ declarationToDocumented declaration =
             Nothing
 
 
-elmCodeBlockToSnippet : String -> Maybe CodeSnippet
+codeSnippetParseErrorInfo : CodeSnippetParseError -> { message : String, details : List String }
+codeSnippetParseErrorInfo =
+    \codeSnippetParseError ->
+        case codeSnippetParseError of
+            CodeSnippetDeclarationsAndImportsParseError ->
+                { message = "code snippet parsing failed"
+                , details =
+                    [ "I expected to find syntactically valid elm code here but something is off with the imports/declarations/checked expressions."
+                    , "If you don't see an obvious mistake, try moving the code to an elm module and see where the compiler complains."
+                    ]
+                }
+
+            CodeSnippetExpectationParseError _ ->
+                { message = "code snippet expectation parsing failed"
+                , details =
+                    [ "I found an expectation marker --> or --:, so I expected a syntactically valid expression or type next."
+                    , "If you don't see an obvious mistake, try moving the code to an elm module and see where the compiler complains."
+                    ]
+                }
+
+
+codeSnippetParseErrorRangeIn : { raw : String, start : Location } -> (CodeSnippetParseError -> Range)
+codeSnippetParseErrorRangeIn documentation =
+    \parseError ->
+        let
+            relativeLocation : Range
+            relativeLocation =
+                case parseError of
+                    CodeSnippetDeclarationsAndImportsParseError ->
+                        { start = { row = 1, column = 1 }, end = { row = 2, column = 1 } }
+
+                    CodeSnippetExpectationParseError toFind ->
+                        case documentation.raw |> String.split toFind of
+                            -- never returned by String.split
+                            [] ->
+                                { start = { row = 1, column = 1 }, end = { row = 2, column = 1 } }
+
+                            beforeToFind :: _ ->
+                                toFind
+                                    |> stringRange
+                                    |> rangeFrom (beforeToFind |> stringRange |> .end)
+        in
+        relativeLocation |> rangeFrom documentation.start
+
+
+stringRange : String -> Range
+stringRange =
+    \string ->
+        let
+            lines : List String
+            lines =
+                string |> String.split "\n"
+        in
+        { start = { row = 1, column = 1 }
+        , end =
+            case lines |> List.LocalExtra.last of
+                Nothing ->
+                    { row = 1, column = 1 }
+
+                Just beforeToFindLastLine ->
+                    { row = lines |> List.length
+                    , column =
+                        (beforeToFindLastLine |> String.length) + 1
+                    }
+        }
+
+
+rangeFrom : Location -> (Range -> Range)
+rangeFrom offsetLocation =
+    \range ->
+        { start = range.start |> locationFrom offsetLocation
+        , end = range.end |> locationFrom offsetLocation
+        }
+
+
+locationFrom : Location -> (Location -> Location)
+locationFrom offsetLocation =
+    \location ->
+        case location.row of
+            1 ->
+                { row = offsetLocation.row
+                , column = offsetLocation.column + location.column - 1
+                }
+
+            startRowAtLeast2 ->
+                { row = offsetLocation.row + startRowAtLeast2 - 1
+                , column = location.column
+                }
+
+
+elmCodeBlockToSnippet : String -> Result CodeSnippetParseError CodeSnippet
 elmCodeBlockToSnippet =
     \elmCode ->
-        let
-            split : { withoutChecks : String, checks : List CodeSnippetCheck }
-            split =
-                elmCode |> elmCodeBlockLinesSplitOffChecks
-        in
-        case split.withoutChecks |> ElmSyntaxParse.importsAndDeclarations of
-            Nothing ->
-                let
-                    _ =
-                        Debug.log "imports and declarations parsing failed" split.withoutChecks
-                in
-                Nothing
+        case elmCode |> elmCodeBlockSplitOffChecks of
+            Err toFind ->
+                CodeSnippetExpectationParseError toFind |> Err
 
-            Just importsAndDeclarations ->
-                { imports = importsAndDeclarations.imports
-                , declarations = importsAndDeclarations.declarations
-                , checks = split.checks
-                }
-                    |> Just
+            Ok split ->
+                case split.withoutChecks |> ElmSyntaxParse.importsAndDeclarations of
+                    Nothing ->
+                        CodeSnippetDeclarationsAndImportsParseError |> Err
+
+                    Just importsAndDeclarations ->
+                        { imports = importsAndDeclarations.imports
+                        , declarations = importsAndDeclarations.declarations
+                        , checks = split.checks
+                        }
+                            |> Ok
 
 
-elmCodeBlockLinesSplitOffChecks : String -> { withoutChecks : String, checks : List CodeSnippetCheck }
-elmCodeBlockLinesSplitOffChecks =
+elmCodeBlockSplitOffChecks : String -> Result String { withoutChecks : String, checks : List CodeSnippetCheck }
+elmCodeBlockSplitOffChecks =
     \elmCodeBlock ->
         let
             chunkSplitAt : String -> (String -> List String)
@@ -1141,63 +1340,67 @@ codeBlockToChunks =
             |> List.map .content
 
 
-elmCodeBlockChunksSplitOffChecks : List String -> { withoutChecks : String, checks : List CodeSnippetCheck }
+elmCodeBlockChunksSplitOffChecks : List String -> Result String { withoutChecks : String, checks : List CodeSnippetCheck }
 elmCodeBlockChunksSplitOffChecks chunks =
     case chunks of
         [] ->
-            { withoutChecks = "", checks = [] }
+            { withoutChecks = "", checks = [] } |> Ok
 
         [ onlyChunk ] ->
-            { withoutChecks = onlyChunk, checks = [] }
+            { withoutChecks = onlyChunk, checks = [] } |> Ok
 
         chunk0 :: chunk1 :: chunk2Up ->
             case chunk0 |> ElmSyntaxParse.expression of
                 Nothing ->
-                    let
-                        chunk1Up : { withoutChecks : String, checks : List CodeSnippetCheck }
-                        chunk1Up =
-                            (chunk1 :: chunk2Up) |> elmCodeBlockChunksSplitOffChecks
-                    in
-                    { chunk1Up | withoutChecks = [ chunk0, "\n\n", chunk1Up.withoutChecks ] |> String.concat }
+                    (chunk1 :: chunk2Up)
+                        |> elmCodeBlockChunksSplitOffChecks
+                        |> Result.map
+                            (\chunk1Up ->
+                                { chunk1Up | withoutChecks = [ chunk0, "\n\n", chunk1Up.withoutChecks ] |> String.concat }
+                            )
 
                 Just checked ->
-                    let
-                        chunk2UpSeparated : { withoutChecks : String, checks : List CodeSnippetCheck }
-                        chunk2UpSeparated =
-                            chunk2Up |> elmCodeBlockChunksSplitOffChecks
-                    in
-                    case chunk1 |> toMarked "-->" of
-                        Just expectedExpressionSource ->
-                            case expectedExpressionSource |> ElmSyntaxParse.expression of
-                                Nothing ->
-                                    -- not a check
-                                    { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
+                    chunk2Up
+                        |> elmCodeBlockChunksSplitOffChecks
+                        |> Result.andThen
+                            (\chunk2UpSeparated ->
+                                case chunk1 |> toMarked "-->" of
+                                    Just expectedExpressionSource ->
+                                        case expectedExpressionSource |> ElmSyntaxParse.expression of
+                                            Nothing ->
+                                                chunk1 |> Err
 
-                                Just expectedExpression ->
-                                    { chunk2UpSeparated
-                                        | checks =
-                                            chunk2UpSeparated.checks
-                                                |> (::) { checkedExpression = checked, expectation = Equals expectedExpression }
-                                    }
+                                            Just expectedExpression ->
+                                                { chunk2UpSeparated
+                                                    | checks =
+                                                        chunk2UpSeparated.checks
+                                                            |> (::) { checkedExpression = checked, expectation = Equals expectedExpression }
+                                                }
+                                                    |> Ok
 
-                        Nothing ->
-                            case chunk1 |> toMarked "--:" of
-                                Just expectedTypeSource ->
-                                    case expectedTypeSource |> ElmSyntaxParse.type_ of
-                                        Nothing ->
-                                            -- not a check
-                                            { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
+                                    Nothing ->
+                                        case chunk1 |> toMarked "--:" of
+                                            Just expectedTypeSource ->
+                                                case expectedTypeSource |> ElmSyntaxParse.type_ of
+                                                    Nothing ->
+                                                        expectedTypeSource |> Err
 
-                                        Just expectedType ->
-                                            { chunk2UpSeparated
-                                                | checks =
-                                                    chunk2UpSeparated.checks
-                                                        |> (::) { checkedExpression = checked, expectation = IsOfType expectedType }
-                                            }
+                                                    Just expectedType ->
+                                                        { chunk2UpSeparated
+                                                            | checks =
+                                                                chunk2UpSeparated.checks
+                                                                    |> (::) { checkedExpression = checked, expectation = IsOfType expectedType }
+                                                        }
+                                                            |> Ok
 
-                                Nothing ->
-                                    -- not a check
-                                    { chunk2UpSeparated | withoutChecks = [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat }
+                                            Nothing ->
+                                                -- not a check
+                                                { chunk2UpSeparated
+                                                    | withoutChecks =
+                                                        [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat
+                                                }
+                                                    |> Ok
+                            )
 
 
 toMarked : String -> (String -> Maybe String)
@@ -1227,3 +1430,8 @@ stringToWithoutStart start =
 
         else
             Nothing
+
+
+type CodeSnippetParseError
+    = CodeSnippetExpectationParseError String
+    | CodeSnippetDeclarationsAndImportsParseError

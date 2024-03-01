@@ -396,8 +396,8 @@ completeOrMergeBlocks state newRawBlock =
                         :: rest
                 }
 
-        ( _, (RawUnorderedListBlock tight intended1 closeListItems2 openListItem2) :: rest ) ->
-            case newRawBlock of
+        ( newToUnorderedListBlock, (RawUnorderedListBlock tight intended1 closeListItems2 openListItem2) :: rest ) ->
+            case newToUnorderedListBlock of
                 RawUnorderedListBlock _ intended2 _ openListItem1 ->
                     if openListItem2.marker == openListItem1.marker then
                         case Parser.Advanced.run rawBlockParser openListItem2.body of
