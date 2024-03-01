@@ -25,6 +25,20 @@ config =
     Now, how do you find all the places where things changed for your examples?
     The compiler certainly doesn't check them which makes it easy to miss some
 
+## possible ideas for the future
+
+  - Make up fuzzy check syntax. Something like
+    ```elm
+    --* xs is list unit
+    List.take 3 xs |> List.length
+    --> Basics.maximum 3 (xs |> List.length)
+
+    --* xs, ys is list unit
+    List.map2 Tuple.pair xs ys |> List.length
+    --> Basics.minimum (xs |> List.length) (ys |> List.length)
+    ```
+    where `list unit` is interpreted as `Fuzz.list (Fuzz.constant ())`
+
 ## thanks
   - Christoph Hermann (stoeffel) for [elm-verify-examples](https://github.com/stoeffel/elm-verify-examples)
     which established the core ideas and syntax in a nice command line tool
