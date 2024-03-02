@@ -1,4 +1,4 @@
-module Declaration.LocalExtra exposing (nameAlter, subReferencesAlter, usedModules)
+module Declaration.LocalExtra exposing (nameAlter, names, subReferencesAlter, usedModules)
 
 import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.ModuleName
@@ -8,6 +8,39 @@ import List.LocalExtra
 import Pattern.LocalExtra
 import Set exposing (Set)
 import Type.LocalExtra
+
+
+{-| Declared name (+ possible variant names)
+-}
+names : Declaration -> Set String
+names =
+    \declaration ->
+        case declaration of
+            Elm.Syntax.Declaration.FunctionDeclaration functionDeclaration ->
+                let
+                    (Node _ implementation) =
+                        functionDeclaration.declaration
+                in
+                implementation.name |> Elm.Syntax.Node.value |> Set.singleton
+
+            Elm.Syntax.Declaration.AliasDeclaration typeAliasDeclaration ->
+                typeAliasDeclaration.name |> Elm.Syntax.Node.value |> Set.singleton
+
+            Elm.Syntax.Declaration.CustomTypeDeclaration variantType ->
+                variantType.constructors
+                    |> List.map (\(Node _ variant) -> variant.name |> Elm.Syntax.Node.value)
+                    |> Set.fromList
+                    |> Set.insert (variantType.name |> Elm.Syntax.Node.value)
+
+            Elm.Syntax.Declaration.PortDeclaration signature ->
+                signature.name |> Elm.Syntax.Node.value |> Set.singleton
+
+            Elm.Syntax.Declaration.InfixDeclaration infixDeclaration ->
+                infixDeclaration.operator |> Elm.Syntax.Node.value |> Set.singleton
+
+            -- invalid
+            Elm.Syntax.Declaration.Destructuring _ _ ->
+                Set.empty
 
 
 nameAlter : (String -> String) -> (Declaration -> Declaration)

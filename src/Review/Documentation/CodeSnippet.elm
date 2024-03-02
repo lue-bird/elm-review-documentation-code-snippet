@@ -17,12 +17,10 @@ import Dict
 import Elm.CodeGen
 import Elm.DSLParser
 import Elm.Docs
-import Elm.Parser
 import Elm.Pretty
 import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.Exposing
 import Elm.Syntax.Expression
-import Elm.Syntax.File
 import Elm.Syntax.Import
 import Elm.Syntax.Module
 import Elm.Syntax.ModuleName
@@ -502,6 +500,11 @@ commentToModuleHeader resources =
             Nothing
 
 
+everythingRange : Range
+everythingRange =
+    { start = { row = 1, column = 1 }, end = { row = 1000000, column = 1 } }
+
+
 checkFullProject : ProjectContext -> List (Review.Rule.Error { useErrorForModule : () })
 checkFullProject =
     \context ->
@@ -555,11 +558,6 @@ checkFullProject =
                     []
 
 
-everythingRange : Range
-everythingRange =
-    { start = { row = 1, column = 1 }, end = { row = 1000000, column = 1 } }
-
-
 elmCodeGenTestDescribe : String -> List Elm.CodeGen.Expression -> Maybe Elm.CodeGen.Expression
 elmCodeGenTestDescribe description subTests =
     case subTests of
@@ -610,12 +608,22 @@ createDocumentationCodeSnippetsTestFile =
                             Imports.implicit
                                 |> Imports.insertSyntaxImports infoRaw.exposesByModule codeSnippet.imports
 
+                        snippetLocalDeclarationNames : Set String
+                        snippetLocalDeclarationNames =
+                            codeSnippet.declarations
+                                |> List.LocalExtra.setUnionMap Declaration.LocalExtra.names
+
                         referenceFullyQualifyAndAdaptLocationPrefix : ( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String )
                         referenceFullyQualifyAndAdaptLocationPrefix =
                             \( qualification, unqualifiedName ) ->
                                 case ( qualification, unqualifiedName ) |> Origin.determine imports of
                                     [] ->
-                                        ( [], [ locationPrefix, "__", unqualifiedName ] |> String.concat )
+                                        if snippetLocalDeclarationNames |> Set.member unqualifiedName then
+                                            ( [], [ locationPrefix, "__", unqualifiedName ] |> String.concat )
+
+                                        else
+                                            -- pattern variable or let
+                                            ( [], unqualifiedName )
 
                                     moduleNamePart0 :: moduleNamePart1Up ->
                                         ( moduleNamePart0 :: moduleNamePart1Up, unqualifiedName )
@@ -1200,6 +1208,29 @@ codeSnippetParseErrorInfo =
                 }
 
 
+rangeFrom : Location -> (Range -> Range)
+rangeFrom offsetLocation =
+    \range ->
+        { start = range.start |> locationFrom offsetLocation
+        , end = range.end |> locationFrom offsetLocation
+        }
+
+
+locationFrom : Location -> (Location -> Location)
+locationFrom offsetLocation =
+    \location ->
+        case location.row of
+            1 ->
+                { row = offsetLocation.row
+                , column = offsetLocation.column + location.column - 1
+                }
+
+            startRowAtLeast2 ->
+                { row = offsetLocation.row + startRowAtLeast2 - 1
+                , column = location.column
+                }
+
+
 codeSnippetParseErrorRangeIn : { raw : String, start : Location } -> (CodeSnippetParseError -> Range)
 codeSnippetParseErrorRangeIn documentation =
     \parseError ->
@@ -1259,29 +1290,6 @@ stringRange =
         }
 
 
-rangeFrom : Location -> (Range -> Range)
-rangeFrom offsetLocation =
-    \range ->
-        { start = range.start |> locationFrom offsetLocation
-        , end = range.end |> locationFrom offsetLocation
-        }
-
-
-locationFrom : Location -> (Location -> Location)
-locationFrom offsetLocation =
-    \location ->
-        case location.row of
-            1 ->
-                { row = offsetLocation.row
-                , column = offsetLocation.column + location.column - 1
-                }
-
-            startRowAtLeast2 ->
-                { row = offsetLocation.row + startRowAtLeast2 - 1
-                , column = location.column
-                }
-
-
 elmCodeBlockToSnippet : String -> Result CodeSnippetParseError CodeSnippet
 elmCodeBlockToSnippet =
     \elmCode ->
@@ -1314,9 +1322,15 @@ elmCodeBlockSplitOffChecks =
                         [] ->
                             [ chunk ]
 
+                        -- no mark
                         [ onlyChunk ] ->
                             [ onlyChunk ]
 
+                        -- starts with mark
+                        [ "", onlyChunk ] ->
+                            [ mark ++ onlyChunk ]
+
+                        -- has content before mark
                         realChunk0 :: realChunk1 :: realChunk2Up ->
                             [ realChunk0, mark ++ ((realChunk1 :: realChunk2Up) |> String.join mark) ]
         in

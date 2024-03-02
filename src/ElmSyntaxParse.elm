@@ -51,7 +51,7 @@ expression =
             moduleSourceCode =
                 "module A exposing (..)\na =\n"
                     ++ (rawSourceCode
-                            |> String.lines
+                            |> String.split "\n"
                             |> List.map (\line -> "    " ++ line)
                             |> String.join "\n"
                        )
