@@ -1,6 +1,7 @@
 module Review.Documentation.CodeSnippet exposing (check)
 
-{-| Checks your small code examples in the readme, module headers and declaration comments for syntax, type matches and correctness
+{-| Checks your small code examples in the readme, module headers and declaration comments
+for valid syntax, matching types and correctness
 by generating tests from these code snippets.
 
     import Review.Documentation.CodeSnippet
