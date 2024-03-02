@@ -1,7 +1,7 @@
-# elm-review-documentation-code-snippet
+[🔧 `Review.Documentation.CodeSnippet.check`](https://package.elm-lang.org/packages/lue-bird/elm-review-documentation-example/1.0.0/Review-Documentation-CodeSnippet#check "provides fixes") checks your small code examples in the readme, module headers and declaration comments for syntax, type matches and correctness.
 
-[🔧 `Review.Documentation.CodeSnippet.check`](https://package.elm-lang.org/packages/lue-bird/elm-review-documentation-example/1.0.0/Review-Documentation-CodeSnippet#check "provides fixes")
-automatically generates tests from the examples in your documentation (readme, module header, declaration comments).
+To check this, it generates tests from these code snippets
+(If you know [`elm-verify-examples`](https://github.com/stoeffel/elm-verify-examples), you also know how this works. This rule has only a few extras like checking for types or actually getting errors for invalid syntax.)
 ```elm
 {-| `Dict.keys` but returning a `Set` instead of a `List`.
 
@@ -21,23 +21,6 @@ Dict.fromList [ ( 0, "A" ), ( 1, "B" ), ( 2, "C" ) ]
     |> keySet
     |> Expect.equal (Set.fromList [ 0, 1, 2 ])
 ```
-If you know [`elm-verify-examples`](https://github.com/stoeffel/elm-verify-examples), you also know how this works.
-There are only a few extras like checking for types you'll get only by using this rule instead.
-
-```elm
-import Review.Rule
-import Review.Documentation.Example
-
-config : List Review.Rule.Rule
-config =
-    [ Review.Documentation.CodeSnippet.check
-    ]
-```
-I suggest running it in the background
-```noformatingples
-elm-review --rules Review.Documentation.CodeSnippet --watch --fix-all-without-prompt
-```
-and adding `tests/DocumentationCodeSnippetTest.elm` to `.gitignore`.
 
 ## why?
 
@@ -45,6 +28,39 @@ Finding broken or incorrect examples in the documentation is confusing and frust
 At the same time, these examples quickly get out of sync with your API.
 Now, how do you find all the places where things changed for your examples?
 The compiler certainly doesn't check them which makes it easy to miss some
+
+## setup
+
+  - ```noformatingples
+    elm install lue-bird/elm-review-documentation-code-snippet
+    ```
+    then add the rule to your `review/src/ReviewConfig.elm`
+    ```elm
+    import Review.Rule
+    import Review.Documentation.Example
+
+    config : List Review.Rule.Rule
+    config =
+        [ Review.Documentation.CodeSnippet.check
+        ]
+    ```
+    or if you don't want to install it, yet
+    ```noformatingples
+    elm-review --template lue-bird/elm-review-documentation-code-snippet/example
+    ```
+  - add a minimal `tests/DocumentationCodeSnippetTest.elm` which the rule can overwrite. Something like
+    ```elm
+    module DocumentationCodeSnippetTest exposing (tests)
+    tests =
+        tests
+    ```
+    You can add this file to `.gitignore`.
+
+I suggest running it in the background
+```noformatingples
+elm-review --rules Review.Documentation.CodeSnippet --watch --fix-all-without-prompt
+```
+while from time to time keeping an eye on possible reported syntax errors and failing/non-compiling generated tests.
 
 ## thanks
   - Christoph Hermann (stoeffel) for [elm-verify-examples](https://github.com/stoeffel/elm-verify-examples)
