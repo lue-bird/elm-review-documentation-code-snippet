@@ -786,7 +786,19 @@ createDocumentationCodeSnippetsTestFile =
                     |> Set.insert [ "Expect" ]
                     |> Set.insert [ "Test" ]
                 )
-                (Imports.implicit |> FastDict.keys |> Set.fromList)
+                (Imports.implicit
+                    |> FastDict.toList
+                    |> List.filterMap
+                        (\( moduleName, implicitImport ) ->
+                            case implicitImport.alias of
+                                Just _ ->
+                                    Nothing
+
+                                Nothing ->
+                                    moduleName |> Just
+                        )
+                    |> Set.fromList
+                )
                 |> Set.toList
                 |> List.map (\moduleName -> Elm.CodeGen.importStmt moduleName Nothing Nothing)
             )
