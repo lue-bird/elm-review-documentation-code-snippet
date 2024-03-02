@@ -1,6 +1,7 @@
 module Review.Documentation.CodeSnippet exposing (check)
 
-{-| Reports choice `type` parameters that aren't used in the definition (often called "opaque types").
+{-| Checks your small code examples in the readme, module headers and declaration comments for syntax, type matches and correctness
+by generating tests from these code snippets.
 
     import Review.Documentation.CodeSnippet
 
@@ -187,9 +188,9 @@ syntaxExposingToExposed =
                 }
 
 
-{-| [`Rule`](https://dark.elm.dmy.fr/packages/jfmengels/elm-review/latest/Review-Rule#Rule) to generate tests from your documentation examples.
-
-There are two kinds of checks:
+{-| [`Rule`](https://dark.elm.dmy.fr/packages/jfmengels/elm-review/latest/Review-Rule#Rule)
+to generate tests from your documentation examples (readme, module header, declaration comment)
+and also to report syntax errors for these code snippets. There are two kinds of checks:
 
 
 ### value checks
@@ -251,6 +252,26 @@ This verifies that the actual value of the expression before `-->` is the same a
         --: Codec Point
     -}
     record = ...
+
+**important** The rule will only report syntax and type errors
+if your code snippet contains at least one of these two checks, so replace
+
+    {-| ...
+
+        myResult : Cmd Int
+        myResult =
+            Ok 3 |> Cmd.Extra.fromResult
+
+    -}
+
+with
+
+    {-| ...
+
+        Ok 3 |> Cmd.Extra.fromResult
+        --: Cmd Int
+
+    -}
 
 Both checks will be run on _all modules_ and the readme. If you want to disable this for e.g. generated or vendored code,
 use [`Review.Rule.ignoreErrorsForDirectories`](https://dark.elm.dmy.fr/packages/jfmengels/elm-review/latest/Review-Rule#ignoreErrorsForDirectories)
