@@ -293,7 +293,8 @@ check =
                                         )
                                 )
                         , { context
-                            | readmeCodeSnippets = codeSnippetsAndErrors |> List.filterMap Result.toMaybe
+                            | readmeCodeSnippets =
+                                codeSnippetsAndErrors |> List.filterMap Result.toMaybe
                           }
                         )
             )
@@ -1035,7 +1036,7 @@ markdownElmCodeBlocksInReadme =
                         RoughMarkdown.OrderedList _ _ _ ->
                             soFar
 
-                        RoughMarkdown.Paragraph _ ->
+                        RoughMarkdown.Paragraph text ->
                             soFar
 
                         RoughMarkdown.CodeBlock codeBlock ->
@@ -1106,7 +1107,7 @@ projectContextsMerge a b =
                 b.documentationCodeSnippetTestModule
     , exposesByModule = FastDict.union a.exposesByModule b.exposesByModule
     , codeSnippetsByModule = FastDict.union a.codeSnippetsByModule b.codeSnippetsByModule
-    , readmeCodeSnippets = a.readmeCodeSnippets
+    , readmeCodeSnippets = a.readmeCodeSnippets ++ b.readmeCodeSnippets
     }
 
 
