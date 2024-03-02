@@ -280,7 +280,7 @@ use [`Review.Rule.ignoreErrorsForDirectories`](https://dark.elm.dmy.fr/packages/
 -}
 check : Rule
 check =
-    Review.Rule.newProjectRuleSchema "Review.Documentation.Example.check" initialProjectContext
+    Review.Rule.newProjectRuleSchema "Review.Documentation.CodeSnippet.check" initialProjectContext
         |> Review.Rule.providesFixesForProjectRule
         |> Review.Rule.withReadmeProjectVisitor
             (\maybeReadme context ->

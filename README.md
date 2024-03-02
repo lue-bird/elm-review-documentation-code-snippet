@@ -37,7 +37,7 @@ The compiler certainly doesn't check them which makes it easy to miss some
     then add the rule to your `review/src/ReviewConfig.elm`
     ```elm
     import Review.Rule
-    import Review.Documentation.Example
+    import Review.Documentation.CodeSnippet
 
     config : List Review.Rule.Rule
     config =
