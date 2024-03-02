@@ -270,7 +270,7 @@ check =
                         let
                             codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
                             codeSnippetsAndErrors =
-                                readme.content |> markdownElmCodeBlocksInReadme |> List.map elmCodeBlockToSnippet
+                                readme.content |> markdownElmCodeBlocksInReadme |> List.filterMap elmCodeBlockToSnippet
                         in
                         ( codeSnippetsAndErrors
                             |> List.filterMap
@@ -382,7 +382,7 @@ check =
                                             let
                                                 codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
                                                 codeSnippetsAndErrors =
-                                                    moduleHeaderDocumentation |> Elm.Syntax.Node.value |> markdownElmCodeBlocksInModule |> List.map elmCodeBlockToSnippet
+                                                    moduleHeaderDocumentation |> Elm.Syntax.Node.value |> markdownElmCodeBlocksInModule |> List.filterMap elmCodeBlockToSnippet
                                             in
                                             ( codeSnippetsAndErrors
                                                 |> List.filterMap
@@ -438,7 +438,7 @@ check =
                                             let
                                                 codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
                                                 codeSnippetsAndErrors =
-                                                    memberDocumented.documentation |> Elm.Syntax.Node.value |> markdownElmCodeBlocksInModule |> List.map elmCodeBlockToSnippet
+                                                    memberDocumented.documentation |> Elm.Syntax.Node.value |> markdownElmCodeBlocksInModule |> List.filterMap elmCodeBlockToSnippet
                                             in
                                             ( codeSnippetsAndErrors
                                                 |> List.filterMap
@@ -1039,7 +1039,7 @@ markdownElmCodeBlocksInReadme =
                         RoughMarkdown.OrderedList _ _ _ ->
                             soFar
 
-                        RoughMarkdown.Paragraph text ->
+                        RoughMarkdown.Paragraph _ ->
                             soFar
 
                         RoughMarkdown.CodeBlock codeBlock ->
@@ -1294,24 +1294,30 @@ stringRange =
         }
 
 
-elmCodeBlockToSnippet : String -> Result CodeSnippetParseError CodeSnippet
+elmCodeBlockToSnippet : String -> Maybe (Result CodeSnippetParseError CodeSnippet)
 elmCodeBlockToSnippet =
     \elmCode ->
         case elmCode |> elmCodeBlockSplitOffChecks of
             Err toFind ->
-                CodeSnippetExpectationParseError toFind |> Err
+                CodeSnippetExpectationParseError toFind |> Err |> Just
 
             Ok split ->
-                case split.withoutChecks |> ElmSyntaxParse.importsAndDeclarations of
-                    Nothing ->
-                        CodeSnippetDeclarationsAndImportsParseError split.withoutChecks |> Err
+                case split.checks of
+                    [] ->
+                        Nothing
 
-                    Just importsAndDeclarations ->
-                        { imports = importsAndDeclarations.imports
-                        , declarations = importsAndDeclarations.declarations
-                        , checks = split.checks
-                        }
-                            |> Ok
+                    check0 :: check1Up ->
+                        case split.withoutChecks |> ElmSyntaxParse.importsAndDeclarations of
+                            Nothing ->
+                                CodeSnippetDeclarationsAndImportsParseError split.withoutChecks |> Err |> Just
+
+                            Just importsAndDeclarations ->
+                                { imports = importsAndDeclarations.imports
+                                , declarations = importsAndDeclarations.declarations
+                                , checks = check0 :: check1Up
+                                }
+                                    |> Ok
+                                    |> Just
 
 
 elmCodeBlockSplitOffChecks : String -> Result String { withoutChecks : String, checks : List CodeSnippetCheck }
@@ -1381,7 +1387,7 @@ codeBlockToChunks =
                                                     :: blocksBeforeCurrentChunk
 
                                             lineFirstCharNonSpace ->
-                                                if currentChunk.lineBeforeIsUnindented then
+                                                if currentChunk.lineBeforeIsUnindented && not soFar.lastLineWasBlank then
                                                     { lineBeforeIsUnindented = True
                                                     , content = [ currentChunk.content, "\n", String.cons lineFirstCharNonSpace lineCharsAfterFirst ] |> String.concat
                                                     }
