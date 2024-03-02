@@ -514,7 +514,7 @@ checkFullProject =
                 [ Review.Rule.globalError
                     { message = "documentation code snippet test module needs to be added"
                     , details =
-                        [ "We need a module to generate documentation code snippet tests in. Please add a module tests/DocumentationCodeSnippet/Test.elm."
+                        [ "We need a module to generate documentation code snippet tests in. Please add a module tests/DocumentationCodeSnippetTest.elm."
                         ]
                     }
                 ]
@@ -779,7 +779,7 @@ createDocumentationCodeSnippetsTestFile =
                         )
         in
         Elm.CodeGen.file
-            (Elm.CodeGen.normalModule [ "DocumentationCodeSnippet.Test" ] [ Elm.CodeGen.funExpose "tests" ])
+            (Elm.CodeGen.normalModule [ "DocumentationCodeSnippetTest" ] [ Elm.CodeGen.funExpose "tests" ])
             (Set.diff
                 (codeSnippets
                     |> List.LocalExtra.setUnionMap codeSnippetUsedModules
@@ -1071,7 +1071,7 @@ projectToModuleContextCreator =
     Review.Rule.initContextCreator
         (\moduleKey moduleName extractSourceCode fullAst _ ->
             case moduleName of
-                [ "DocumentationCodeSnippet", "Test" ] ->
+                [ "DocumentationCodeSnippetTest" ] ->
                     moduleKey |> TestModuleContext
 
                 _ ->

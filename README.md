@@ -37,7 +37,7 @@ I suggest running it in the background
 ```noformatingples
 elm-review --rules Review.Documentation.CodeSnippet --watch --fix-all-without-prompt
 ```
-and adding `tests/DocumentationCodeSnippet.Test.elm` to `.gitignore`.
+and adding `tests/DocumentationCodeSnippetTest.elm` to `.gitignore`.
 
 ## why?
 
