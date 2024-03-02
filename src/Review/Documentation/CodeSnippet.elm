@@ -1353,6 +1353,39 @@ elmCodeBlockToSnippet =
                                     |> Just
 
 
+toMarked : String -> (String -> Maybe String)
+toMarked mark =
+    \string ->
+        case string |> String.split "\n" |> List.LocalExtra.allJustMap (stringToWithoutStart mark) of
+            Just linesWithoutStart ->
+                linesWithoutStart |> String.join "\n" |> Just
+
+            Nothing ->
+                case string |> stringToWithoutStart (mark ++ "\n") of
+                    Just linesWithoutStart ->
+                        linesWithoutStart |> Just
+
+                    Nothing ->
+                        Nothing
+
+
+stringToWithoutStart : String -> (String -> Maybe String)
+stringToWithoutStart start =
+    \string ->
+        let
+            stringTrimmedLeft : String
+            stringTrimmedLeft =
+                string |> String.trimLeft
+        in
+        if stringTrimmedLeft |> String.startsWith start then
+            stringTrimmedLeft
+                |> String.dropLeft (start |> String.length)
+                |> Just
+
+        else
+            Nothing
+
+
 elmCodeBlockSplitOffChecks : String -> Result String { withoutChecks : String, checks : List CodeSnippetCheck }
 elmCodeBlockSplitOffChecks =
     \elmCodeBlock ->
@@ -1534,49 +1567,6 @@ elmCodeBlockChunksSplitOffChecks chunks =
                                                 }
                                                     |> Ok
                             )
-
-
-toMarked : String -> (String -> Maybe String)
-toMarked mark =
-    \string ->
-        case string |> String.split "\n" |> List.LocalExtra.allJustMap (stringToWithoutStart mark) of
-            Just linesWithoutStart ->
-                linesWithoutStart |> String.join "\n" |> Just
-
-            Nothing ->
-                case string |> stringToWithoutStart (mark ++ "\n") of
-                    Just linesWithoutStart ->
-                        linesWithoutStart |> Just
-
-                    Nothing ->
-                        Nothing
-
-
-cs =
-    [ "import Dict"
-    , "filterGroupBy (String.uncons >> Maybe.map Tuple.first) [ \"tree\" , \"\", \"tweet\", \"apple\" , \"leaf\", \"\" ]\n"
-    , "--> Dict.fromList [ ( 't', [ \"tree\", \"tweet\" ] ), ( 'a', [ \"apple\" ] ), ( 'l', [ \"leaf\" ] ) ]"
-    , "filterGroupBy\n    .car\n    [ { name = \"Mary\"\n      , car = Just \"Ford\"\n      }\n    , { name = \"Jack\"\n      , car = Nothing\n      }\n    , { name = \"Jill\"\n      , car = Just \"Tesla\"\n      }\n    , { name = \"John\"\n      , car = Just \"Tesla\"\n      }\n    ]"
-    , ""
-    , "--> Dict.fromList\n       --> [ ( \"Ford\"\n       -->   , [ { name = \"Mary\" , car = Just \"Ford\" } ]\n       -->   )\n       --> , ( \"Tesla\"\n       -->   , [ { name = \"Jill\" , car = Just \"Tesla\" }\n       -->     , { name = \"John\" , car = Just \"Tesla\" }\n       -->     ]\n       -->   )\n       --> ]"
-    ]
-
-
-stringToWithoutStart : String -> (String -> Maybe String)
-stringToWithoutStart start =
-    \string ->
-        let
-            stringTrimmedLeft : String
-            stringTrimmedLeft =
-                string |> String.trimLeft
-        in
-        if stringTrimmedLeft |> String.startsWith start then
-            stringTrimmedLeft
-                |> String.dropLeft (start |> String.length)
-                |> Just
-
-        else
-            Nothing
 
 
 type CodeSnippetParseError
