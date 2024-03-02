@@ -1253,7 +1253,7 @@ codeSnippetParseErrorRangeIn documentation =
                                 )
 
                     CodeSnippetExpectationParseError toFind ->
-                        documentation.raw |> stringRangeOfString toFind
+                        documentation.raw |> stringRangeOfString (toFind |> String.trimLeft)
         in
         relativeRange |> rangeFrom documentation.start
 
@@ -1341,13 +1341,47 @@ elmCodeBlockSplitOffChecks =
                             [ mark ++ onlyChunk ]
 
                         -- has content before mark
-                        realChunk0 :: realChunk1 :: realChunk2Up ->
-                            [ realChunk0, mark ++ ((realChunk1 :: realChunk2Up) |> String.join mark) ]
+                        [ realChunk0, realChunk1 ] ->
+                            [ realChunk0, mark ++ realChunk1 ]
+
+                        -- multiple marks
+                        realChunk0 :: chunk0AfterReal0 :: chunk1AfterReal0 :: chunk2AfterReal0Up ->
+                            case ((mark ++ chunk0AfterReal0) :: chunk1AfterReal0 :: chunk2AfterReal0Up) |> String.join mark |> toMarked mark of
+                                -- all next lines build one marked
+                                Just marked ->
+                                    [ realChunk0
+                                    , marked |> String.split "\n" |> List.map (\line -> mark ++ line) |> String.join "\n"
+                                    ]
+
+                                -- multiple crammed together without blank lines between
+                                Nothing ->
+                                    case chunk0AfterReal0 |> String.split "\n" of
+                                        -- String.split never returns []
+                                        [] ->
+                                            [ realChunk0, mark ++ ((chunk0AfterReal0 :: chunk1AfterReal0 :: chunk2AfterReal0Up) |> String.join mark) ]
+
+                                        realChunk1 :: afterRealChunk1BeforeChunk1AfterReal0 ->
+                                            realChunk0
+                                                :: (mark ++ realChunk1)
+                                                :: ((afterRealChunk1BeforeChunk1AfterReal0 |> String.join "\n")
+                                                        :: (chunk1AfterReal0 :: chunk2AfterReal0Up)
+                                                        |> String.join mark
+                                                        |> chunkSplitAt mark
+                                                   )
         in
         elmCodeBlock
             |> codeBlockToChunks
             |> List.concatMap (chunkSplitAt "-->")
             |> List.concatMap (chunkSplitAt "--:")
+            |> List.filterMap
+                (\chunk ->
+                    case chunk of
+                        "" ->
+                            Nothing
+
+                        filledChunk ->
+                            filledChunk |> Just
+                )
             |> elmCodeBlockChunksSplitOffChecks
 
 
@@ -1477,7 +1511,7 @@ toMarked mark =
                 linesWithoutStart |> String.join "\n" |> Just
 
             Nothing ->
-                case string |> stringToWithoutStart mark of
+                case string |> stringToWithoutStart (mark ++ "\n") of
                     Just linesWithoutStart ->
                         linesWithoutStart |> Just
 
@@ -1485,13 +1519,27 @@ toMarked mark =
                         Nothing
 
 
+cs =
+    [ "import Dict"
+    , "filterGroupBy (String.uncons >> Maybe.map Tuple.first) [ \"tree\" , \"\", \"tweet\", \"apple\" , \"leaf\", \"\" ]\n"
+    , "--> Dict.fromList [ ( 't', [ \"tree\", \"tweet\" ] ), ( 'a', [ \"apple\" ] ), ( 'l', [ \"leaf\" ] ) ]"
+    , "filterGroupBy\n    .car\n    [ { name = \"Mary\"\n      , car = Just \"Ford\"\n      }\n    , { name = \"Jack\"\n      , car = Nothing\n      }\n    , { name = \"Jill\"\n      , car = Just \"Tesla\"\n      }\n    , { name = \"John\"\n      , car = Just \"Tesla\"\n      }\n    ]"
+    , ""
+    , "--> Dict.fromList\n       --> [ ( \"Ford\"\n       -->   , [ { name = \"Mary\" , car = Just \"Ford\" } ]\n       -->   )\n       --> , ( \"Tesla\"\n       -->   , [ { name = \"Jill\" , car = Just \"Tesla\" }\n       -->     , { name = \"John\" , car = Just \"Tesla\" }\n       -->     ]\n       -->   )\n       --> ]"
+    ]
+
+
 stringToWithoutStart : String -> (String -> Maybe String)
 stringToWithoutStart start =
     \string ->
-        if string |> String.startsWith start then
-            string
+        let
+            stringTrimmedLeft : String
+            stringTrimmedLeft =
+                string |> String.trimLeft
+        in
+        if stringTrimmedLeft |> String.startsWith start then
+            stringTrimmedLeft
                 |> String.dropLeft (start |> String.length)
-                |> String.trimLeft
                 |> Just
 
         else
