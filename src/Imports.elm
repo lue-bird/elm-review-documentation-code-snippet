@@ -111,7 +111,10 @@ implicit =
                 |> Set.fromList
         }
       )
-    , ( [ "List" ], { alias = Nothing, exposed = Set.fromList [ "List", "(::)" ] } )
+    , -- exposing (List) excluded because List.List is not valid.
+      -- List is not exposed from module List
+      -- and is instead provided through compiler magic
+      ( [ "List" ], { alias = Nothing, exposed = Set.singleton "(::)" } )
     , ( [ "Maybe" ], { alias = Nothing, exposed = Set.fromList [ "Maybe", "Just", "Nothing" ] } )
     , ( [ "Result" ], { alias = Nothing, exposed = Set.fromList [ "Result", "Ok", "Err" ] } )
     , ( [ "String" ], { alias = Nothing, exposed = Set.singleton "String" } )
@@ -181,9 +184,11 @@ importContext moduleExposes import_ =
             Just (Node _ existingExposing) ->
                 case existingExposing of
                     Elm.Syntax.Exposing.All _ ->
-                        Set.union
-                            moduleExposes.exposedValueAndFunctionAndTypeAliasNames
-                            (moduleExposes |> .exposedChoiceTypesExposingVariants |> FastDict.keys |> Set.fromList)
+                        [ moduleExposes.exposedValueAndFunctionAndTypeAliasNames
+                        , moduleExposes |> .exposedChoiceTypesExposingVariants |> FastDict.keys |> Set.fromList
+                        , moduleExposes |> .exposedChoiceTypesExposingVariants |> FastDict.values |> List.LocalExtra.setUnionMap identity
+                        ]
+                            |> List.LocalExtra.setUnionMap identity
 
                     Elm.Syntax.Exposing.Explicit exposes ->
                         exposes
