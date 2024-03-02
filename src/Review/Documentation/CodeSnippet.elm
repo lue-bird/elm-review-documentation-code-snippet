@@ -595,13 +595,13 @@ createDocumentationCodeSnippetsTestFile =
     \infoRaw ->
         let
             {-
-               - prefix declaration names based on #location
+               - suffix declaration names based on #location
                - map all sub references (type, pattern, value/function) of declarations and actual and expected
                  - to fully qualified using Origin.determine
                  - if no full qualification is found, see if it's defined in `declarations` and adapt the #location name accordingly
             -}
-            codeSnippetFullyQualifyAndAddLocationPrefix : String -> (CodeSnippet -> CodeSnippet)
-            codeSnippetFullyQualifyAndAddLocationPrefix locationPrefix =
+            codeSnippetFullyQualifyAndAddLocationSuffix : String -> (CodeSnippet -> CodeSnippet)
+            codeSnippetFullyQualifyAndAddLocationSuffix locationSuffix =
                 \codeSnippet ->
                     let
                         imports : Imports
@@ -614,13 +614,13 @@ createDocumentationCodeSnippetsTestFile =
                             codeSnippet.declarations
                                 |> List.LocalExtra.setUnionMap Declaration.LocalExtra.names
 
-                        referenceFullyQualifyAndAdaptLocationPrefix : ( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String )
-                        referenceFullyQualifyAndAdaptLocationPrefix =
+                        referenceFullyQualifyAndAdaptLocationSuffix : ( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String )
+                        referenceFullyQualifyAndAdaptLocationSuffix =
                             \( qualification, unqualifiedName ) ->
                                 case ( qualification, unqualifiedName ) |> Origin.determine imports of
                                     [] ->
                                         if snippetLocalDeclarationNames |> Set.member unqualifiedName then
-                                            ( [], [ locationPrefix, "__", unqualifiedName ] |> String.concat )
+                                            ( [], [ unqualifiedName, "__", locationSuffix ] |> String.concat )
 
                                         else
                                             -- pattern variable or let
@@ -634,17 +634,17 @@ createDocumentationCodeSnippetsTestFile =
                             \codeSnippetCheck ->
                                 { checkedExpression =
                                     codeSnippetCheck.checkedExpression
-                                        |> Expression.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationPrefix
+                                        |> Expression.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationSuffix
                                 , expectation =
                                     case codeSnippetCheck.expectation of
                                         Equals expectedExpression ->
                                             expectedExpression
-                                                |> Expression.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationPrefix
+                                                |> Expression.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationSuffix
                                                 |> Equals
 
                                         IsOfType expectedType ->
                                             expectedType
-                                                |> Type.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationPrefix
+                                                |> Type.LocalExtra.referencesAlter referenceFullyQualifyAndAdaptLocationSuffix
                                                 |> IsOfType
                                 }
                     in
@@ -654,26 +654,26 @@ createDocumentationCodeSnippetsTestFile =
                             |> List.map
                                 (\declaration ->
                                     declaration
-                                        |> Declaration.LocalExtra.nameAlter (\name -> [ locationPrefix, "__", name ] |> String.concat)
-                                        |> Declaration.LocalExtra.subReferencesAlter referenceFullyQualifyAndAdaptLocationPrefix
+                                        |> Declaration.LocalExtra.nameAlter (\name -> [ name, "__", locationSuffix ] |> String.concat)
+                                        |> Declaration.LocalExtra.subReferencesAlter referenceFullyQualifyAndAdaptLocationSuffix
                                 )
                     , checks = codeSnippet.checks |> List.map codeSnippetCheckFullyQualify
                     }
 
-            codeSnippetsFullyQualifyAndAddLocationPrefix : String -> (List CodeSnippet -> List CodeSnippet)
-            codeSnippetsFullyQualifyAndAddLocationPrefix locationPrefix =
+            codeSnippetsFullyQualifyAndAddLocationSuffix : String -> (List CodeSnippet -> List CodeSnippet)
+            codeSnippetsFullyQualifyAndAddLocationSuffix locationSuffix =
                 \codeSnippetsRaw ->
                     codeSnippetsRaw
                         |> List.indexedMap
                             (\snippetIndex codeSnippet ->
                                 codeSnippet
-                                    |> codeSnippetFullyQualifyAndAddLocationPrefix
-                                        ([ locationPrefix, "_", snippetIndex |> String.fromInt ] |> String.concat)
+                                    |> codeSnippetFullyQualifyAndAddLocationSuffix
+                                        ([ locationSuffix, "_", snippetIndex |> String.fromInt ] |> String.concat)
                             )
 
             readmeCodeSnippets : List CodeSnippet
             readmeCodeSnippets =
-                infoRaw.readmeCodeSnippets |> codeSnippetsFullyQualifyAndAddLocationPrefix "Readme"
+                infoRaw.readmeCodeSnippets |> codeSnippetsFullyQualifyAndAddLocationSuffix "Readme"
 
             codeSnippetsByModule :
                 Dict
@@ -687,8 +687,8 @@ createDocumentationCodeSnippetsTestFile =
                     |> FastDict.map
                         (\moduleName moduleInfoRaw ->
                             let
-                                moduleNameLocationPrefix : String -> String
-                                moduleNameLocationPrefix subName =
+                                moduleNameLocationSuffix : String -> String
+                                moduleNameLocationSuffix subName =
                                     [ moduleName |> String.join "_", "__", subName ] |> String.concat
 
                                 codeSnippetAddImportLocalModuleExposingAll : CodeSnippet -> CodeSnippet
@@ -704,14 +704,14 @@ createDocumentationCodeSnippetsTestFile =
                             , inModuleHeader =
                                 moduleInfoRaw.inModuleHeader
                                     |> List.map codeSnippetAddImportLocalModuleExposingAll
-                                    |> codeSnippetsFullyQualifyAndAddLocationPrefix (moduleNameLocationPrefix "Header")
+                                    |> codeSnippetsFullyQualifyAndAddLocationSuffix (moduleNameLocationSuffix "Header")
                             , inMembers =
                                 moduleInfoRaw.inMembers
                                     |> FastDict.map
                                         (\memberName memberCodeSnippets ->
                                             memberCodeSnippets
                                                 |> List.map codeSnippetAddImportLocalModuleExposingAll
-                                                |> codeSnippetsFullyQualifyAndAddLocationPrefix (moduleNameLocationPrefix memberName)
+                                                |> codeSnippetsFullyQualifyAndAddLocationSuffix (moduleNameLocationSuffix memberName)
                                         )
                             }
                         )

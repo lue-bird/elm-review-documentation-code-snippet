@@ -776,8 +776,8 @@ tests =
                     [ Test.test
                         "0"
                         (\\() ->
-                            (A__toggle_0__On |> A.toggle)
-                                |> Expect.equal A__toggle_0__Off
+                            (On__A__toggle_0 |> A.toggle)
+                                |> Expect.equal Off__A__toggle_0
                         )
                     ]
                 ]
@@ -785,9 +785,9 @@ tests =
         ]
 
 
-type A__toggle_0__Toggle
-    = A__toggle_0__On
-    | A__toggle_0__Off
+type Toggle__A__toggle_0
+    = On__A__toggle_0
+    | Off__A__toggle_0
 """
                             ]
                           )
