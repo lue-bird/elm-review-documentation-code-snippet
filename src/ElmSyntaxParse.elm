@@ -75,8 +75,12 @@ type_ =
         let
             moduleSourceCode : String
             moduleSourceCode =
-                "module A exposing (..)\nport "
-                    ++ rawSourceCode
+                "module A exposing (..)\nport a :\n"
+                    ++ (rawSourceCode
+                            |> String.split "\n"
+                            |> List.map (\line -> "    " ++ line)
+                            |> String.join "\n"
+                       )
         in
         case moduleSourceCode |> Elm.Parser.parseToFile of
             Ok fileWithoutHeaderAndPortInsteadOfFunction ->

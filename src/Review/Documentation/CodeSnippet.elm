@@ -780,10 +780,13 @@ createDocumentationCodeSnippetsTestFile =
         in
         Elm.CodeGen.file
             (Elm.CodeGen.normalModule [ "DocumentationCodeSnippet.Test" ] [ Elm.CodeGen.funExpose "tests" ])
-            (codeSnippets
-                |> List.LocalExtra.setUnionMap codeSnippetUsedModules
-                |> Set.insert [ "Expect" ]
-                |> Set.insert [ "Test" ]
+            (Set.diff
+                (codeSnippets
+                    |> List.LocalExtra.setUnionMap codeSnippetUsedModules
+                    |> Set.insert [ "Expect" ]
+                    |> Set.insert [ "Test" ]
+                )
+                (Imports.implicit |> FastDict.keys |> Set.fromList)
                 |> Set.toList
                 |> List.map (\moduleName -> Elm.CodeGen.importStmt moduleName Nothing Nothing)
             )
