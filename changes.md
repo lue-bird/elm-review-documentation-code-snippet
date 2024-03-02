@@ -1,3 +1,2 @@
-## TODO: consider
-  - compare `.imports` with full qualifications present in all references and automatically add missing imports as a fix
+## TODO
   - make blank line + indented still parse into previous block
