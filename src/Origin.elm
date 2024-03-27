@@ -46,20 +46,15 @@ determine imports =
                             Nothing ->
                                 case qualification of
                                     [] ->
-                                        let
-                                            maybeOriginByExpose : Maybe Elm.Syntax.ModuleName.ModuleName
-                                            maybeOriginByExpose =
-                                                imports
-                                                    |> FastDict.LocalExtra.firstJustMap
-                                                        (\importModuleName import_ ->
-                                                            if import_.exposed |> Set.member unqualifiedName then
-                                                                importModuleName |> Just
+                                        imports
+                                            |> FastDict.LocalExtra.firstJustMap
+                                                (\importModuleName import_ ->
+                                                    if import_.exposed |> Set.member unqualifiedName then
+                                                        importModuleName |> Just
 
-                                                            else
-                                                                Nothing
-                                                        )
-                                        in
-                                        maybeOriginByExpose
+                                                    else
+                                                        Nothing
+                                                )
 
-                                    moduleNamePart0 :: moduleNamePart1 ->
+                                    _ :: _ ->
                                         Nothing
