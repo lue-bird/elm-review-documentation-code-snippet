@@ -1,12 +1,13 @@
-module Declaration.LocalExtra exposing (nameAlter, names, subReferencesAlter, usedModules)
+module Declaration.LocalExtra exposing (nameAlter, names, references, subReferencesAlter, usedModules)
 
 import Elm.Syntax.Declaration exposing (Declaration)
 import Elm.Syntax.ModuleName
-import Elm.Syntax.Node exposing (Node(..))
+import Elm.Syntax.Node
+import Elm.Syntax.Pattern
 import Expression.LocalExtra
-import List.LocalExtra
 import Pattern.LocalExtra
 import Set exposing (Set)
+import Set.LocalExtra
 import Type.LocalExtra
 
 
@@ -17,18 +18,18 @@ names =
     \declaration ->
         case declaration of
             Elm.Syntax.Declaration.FunctionDeclaration functionDeclaration ->
-                let
-                    (Node _ implementation) =
-                        functionDeclaration.declaration
-                in
-                implementation.name |> Elm.Syntax.Node.value |> Set.singleton
+                functionDeclaration.declaration
+                    |> Elm.Syntax.Node.value
+                    |> .name
+                    |> Elm.Syntax.Node.value
+                    |> Set.singleton
 
             Elm.Syntax.Declaration.AliasDeclaration typeAliasDeclaration ->
                 typeAliasDeclaration.name |> Elm.Syntax.Node.value |> Set.singleton
 
             Elm.Syntax.Declaration.CustomTypeDeclaration variantType ->
                 variantType.constructors
-                    |> List.map (\(Node _ variant) -> variant.name |> Elm.Syntax.Node.value)
+                    |> List.map (\(Elm.Syntax.Node.Node _ variant) -> variant.name |> Elm.Syntax.Node.value)
                     |> Set.fromList
                     |> Set.insert (variantType.name |> Elm.Syntax.Node.value)
 
@@ -209,37 +210,41 @@ usedModules =
 
 references : Declaration -> Set ( Elm.Syntax.ModuleName.ModuleName, String )
 references =
-    -- IGNORE TCO
     \declaration ->
         case declaration of
             Elm.Syntax.Declaration.FunctionDeclaration functionDeclaration ->
+                let
+                    argumentPatterns : List (Elm.Syntax.Node.Node Elm.Syntax.Pattern.Pattern)
+                    argumentPatterns =
+                        functionDeclaration.declaration
+                            |> Elm.Syntax.Node.value
+                            |> .arguments
+                in
                 [ case functionDeclaration.signature of
                     Nothing ->
                         Set.empty
 
-                    Just (Node _ signature) ->
+                    Just (Elm.Syntax.Node.Node _ signature) ->
                         signature
                             |> .typeAnnotation
                             |> Type.LocalExtra.nodeReferences
                 , functionDeclaration.declaration
                     |> Elm.Syntax.Node.value
                     |> .expression
-                    |> Elm.Syntax.Node.value
-                    |> Expression.LocalExtra.references
-                , functionDeclaration.declaration
-                    |> Elm.Syntax.Node.value
-                    |> .arguments
-                    |> List.LocalExtra.setUnionMap (\patternNode -> patternNode |> Pattern.LocalExtra.nodeReferences)
+                    |> Expression.LocalExtra.nodeReferencesWithBranchLocalVariables
+                        (argumentPatterns |> Set.LocalExtra.unionFromListMap Pattern.LocalExtra.nodeVariables)
+                , argumentPatterns
+                    |> Set.LocalExtra.unionFromListMap (\patternNode -> patternNode |> Pattern.LocalExtra.nodeReferences)
                 ]
-                    |> List.LocalExtra.setUnionMap identity
+                    |> Set.LocalExtra.unionFromList
 
             Elm.Syntax.Declaration.AliasDeclaration typeAliasDeclaration ->
                 typeAliasDeclaration.typeAnnotation |> Type.LocalExtra.nodeReferences
 
             Elm.Syntax.Declaration.CustomTypeDeclaration variantType ->
                 variantType.constructors
-                    |> List.concatMap (\(Node _ variant) -> variant.arguments)
-                    |> List.LocalExtra.setUnionMap
+                    |> List.concatMap (\(Elm.Syntax.Node.Node _ variant) -> variant.arguments)
+                    |> Set.LocalExtra.unionFromListMap
                         (\attachmentType -> attachmentType |> Type.LocalExtra.nodeReferences)
 
             Elm.Syntax.Declaration.PortDeclaration signature ->

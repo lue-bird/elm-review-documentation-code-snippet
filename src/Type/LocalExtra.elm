@@ -1,10 +1,10 @@
-module Type.LocalExtra exposing (nodeReferences, referencesAlter, usedModules)
+module Type.LocalExtra exposing (nodeReferences, references, referencesAlter, usedModules)
 
 import Elm.Syntax.ModuleName
-import Elm.Syntax.Node exposing (Node(..))
+import Elm.Syntax.Node
 import Elm.Syntax.TypeAnnotation
-import List.LocalExtra
 import Set exposing (Set)
+import Set.LocalExtra
 
 
 referencesAlter :
@@ -38,7 +38,7 @@ map :
     -> (Elm.Syntax.TypeAnnotation.TypeAnnotation -> Elm.Syntax.TypeAnnotation.TypeAnnotation)
 map typeChange =
     let
-        step : Node Elm.Syntax.TypeAnnotation.TypeAnnotation -> Node Elm.Syntax.TypeAnnotation.TypeAnnotation
+        step : Elm.Syntax.Node.Node Elm.Syntax.TypeAnnotation.TypeAnnotation -> Elm.Syntax.Node.Node Elm.Syntax.TypeAnnotation.TypeAnnotation
         step =
             Elm.Syntax.Node.map (\stepType -> stepType |> map typeChange)
     in
@@ -86,18 +86,18 @@ references =
                 Set.union (input |> nodeReferences) (output |> nodeReferences)
 
             Elm.Syntax.TypeAnnotation.Tupled parts ->
-                parts |> List.LocalExtra.setUnionMap nodeReferences
+                parts |> Set.LocalExtra.unionFromListMap nodeReferences
 
             Elm.Syntax.TypeAnnotation.Record fields ->
-                fields |> List.LocalExtra.setUnionMap (\(Node _ ( _, fieldValue )) -> fieldValue |> nodeReferences)
+                fields |> Set.LocalExtra.unionFromListMap (\(Elm.Syntax.Node.Node _ ( _, fieldValue )) -> fieldValue |> nodeReferences)
 
-            Elm.Syntax.TypeAnnotation.GenericRecord _ (Node _ fields) ->
-                fields |> List.LocalExtra.setUnionMap (\(Node _ ( _, fieldValue )) -> fieldValue |> nodeReferences)
+            Elm.Syntax.TypeAnnotation.GenericRecord _ (Elm.Syntax.Node.Node _ fields) ->
+                fields |> Set.LocalExtra.unionFromListMap (\(Elm.Syntax.Node.Node _ ( _, fieldValue )) -> fieldValue |> nodeReferences)
 
-            Elm.Syntax.TypeAnnotation.Typed (Node _ ( moduleName, unqualifiedName )) arguments ->
+            Elm.Syntax.TypeAnnotation.Typed (Elm.Syntax.Node.Node _ ( qualification, unqualifiedName )) arguments ->
                 arguments
-                    |> List.LocalExtra.setUnionMap nodeReferences
-                    |> Set.insert ( moduleName, unqualifiedName )
+                    |> Set.LocalExtra.unionFromListMap nodeReferences
+                    |> Set.insert ( qualification, unqualifiedName )
 
 
 usedModules : Elm.Syntax.TypeAnnotation.TypeAnnotation -> Set Elm.Syntax.ModuleName.ModuleName
@@ -109,6 +109,6 @@ usedModules =
             |> Set.remove []
 
 
-nodeReferences : Node Elm.Syntax.TypeAnnotation.TypeAnnotation -> Set ( Elm.Syntax.ModuleName.ModuleName, String )
+nodeReferences : Elm.Syntax.Node.Node Elm.Syntax.TypeAnnotation.TypeAnnotation -> Set ( Elm.Syntax.ModuleName.ModuleName, String )
 nodeReferences =
-    \(Node _ type_) -> type_ |> references
+    \(Elm.Syntax.Node.Node _ type_) -> type_ |> references

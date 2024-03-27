@@ -7,18 +7,18 @@ import Imports exposing (Imports)
 import Set
 
 
-determine : Imports -> (( Elm.Syntax.ModuleName.ModuleName, String ) -> Elm.Syntax.ModuleName.ModuleName)
+determine : Imports -> (( Elm.Syntax.ModuleName.ModuleName, String ) -> Maybe Elm.Syntax.ModuleName.ModuleName)
 determine imports =
     \reference ->
         case reference of
             ( [], "List" ) ->
                 -- the only reference that has no origin, so e.g. List.List is a compiler error.
-                []
+                [] |> Just
 
             ( qualification, unqualifiedName ) ->
                 case imports |> FastDict.get qualification of
                     Just _ ->
-                        qualification
+                        qualification |> Just
 
                     Nothing ->
                         let
@@ -41,7 +41,7 @@ determine imports =
                         in
                         case maybeOriginByAlias of
                             Just aliasOriginModuleName ->
-                                aliasOriginModuleName
+                                aliasOriginModuleName |> Just
 
                             Nothing ->
                                 case qualification of
@@ -59,13 +59,7 @@ determine imports =
                                                                 Nothing
                                                         )
                                         in
-                                        case maybeOriginByExpose of
-                                            Just moduleName ->
-                                                moduleName
-
-                                            Nothing ->
-                                                -- defined branch-locally (pattern variable or let declared)
-                                                []
+                                        maybeOriginByExpose
 
                                     moduleNamePart0 :: moduleNamePart1 ->
-                                        moduleNamePart0 :: moduleNamePart1
+                                        Nothing

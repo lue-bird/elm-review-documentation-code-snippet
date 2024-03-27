@@ -1,4 +1,4 @@
-module Review.Documentation.CodeSnippet exposing (check)
+module Review.Documentation.CodeSnippet exposing (check, checkImplicitlyImportingEverythingFromCurrentModule)
 
 {-| Checks your small code examples in the readme, module headers and declaration comments
 for valid syntax, matching types and correctness
@@ -10,7 +10,7 @@ by generating tests from these code snippets.
         [ Review.Documentation.CodeSnippet.check
         ]
 
-@docs check
+@docs check, checkImplicitlyImportingEverythingFromCurrentModule
 
 -}
 
@@ -26,8 +26,8 @@ import Elm.Syntax.Expression
 import Elm.Syntax.Import
 import Elm.Syntax.Module
 import Elm.Syntax.ModuleName
-import Elm.Syntax.Node exposing (Node(..))
-import Elm.Syntax.Range exposing (Location, Range)
+import Elm.Syntax.Node
+import Elm.Syntax.Range exposing (Range)
 import Elm.Syntax.TypeAnnotation
 import ElmSyntaxParse
 import Expression.LocalExtra
@@ -38,14 +38,15 @@ import Origin
 import RecordWithoutConstructorFunction exposing (RecordWithoutConstructorFunction)
 import Review.Fix
 import Review.Project.Dependency
-import Review.Rule exposing (ModuleKey, Rule)
+import Review.Rule
 import RoughMarkdown
 import Set exposing (Set)
+import Set.LocalExtra
 import Type.LocalExtra
 
 
 type alias ProjectContext =
-    { documentationCodeSnippetTestModule : Maybe { key : ModuleKey, source : String }
+    { documentationCodeSnippetTestModule : Maybe { key : Review.Rule.ModuleKey, source : String }
     , exposesByModule :
         Dict
             Elm.Syntax.ModuleName.ModuleName
@@ -59,12 +60,14 @@ type alias ProjectContext =
             , inModuleHeader : List CodeSnippet
             , inMembers : Dict String (List CodeSnippet)
             }
+    , readmeKey : Maybe Review.Rule.ReadmeKey
     , readmeCodeSnippets : List CodeSnippet
     }
 
 
 type alias CodeSnippet =
-    { imports : List Elm.Syntax.Import.Import
+    { startRow : Int
+    , imports : List Elm.Syntax.Import.Import
     , declarations : List Elm.Syntax.Declaration.Declaration
     , checks : List CodeSnippetCheck
     }
@@ -83,7 +86,7 @@ type CodeSnippetExpectation
 
 type ModuleContext
     = NonTestModuleContext NonTestModuleContext
-    | TestModuleContext ModuleKey
+    | TestModuleContext Review.Rule.ModuleKey
 
 
 type alias NonTestModuleContext =
@@ -100,6 +103,143 @@ type alias NonTestModuleContext =
 type ExposingKind
     = ExposingExplicit
     | ExposingAll
+
+
+toMarked : String -> (String -> Maybe String)
+toMarked mark =
+    \string ->
+        case string |> String.split "\n" |> List.LocalExtra.allJustMap (stringToWithoutStart mark) of
+            Just linesWithoutStart ->
+                linesWithoutStart |> String.join "\n" |> Just
+
+            Nothing ->
+                case string |> stringToWithoutStart (mark ++ "\n") of
+                    Just linesWithoutStart ->
+                        linesWithoutStart |> Just
+
+                    Nothing ->
+                        Nothing
+
+
+stringToWithoutStart : String -> (String -> Maybe String)
+stringToWithoutStart start =
+    \string ->
+        let
+            stringTrimmedLeft : String
+            stringTrimmedLeft =
+                string |> String.trimLeft
+        in
+        if stringTrimmedLeft |> String.startsWith start then
+            stringTrimmedLeft
+                |> String.dropLeft (start |> String.length)
+                |> Just
+
+        else
+            Nothing
+
+
+elmCodeBlockChunksSplitOffChecks :
+    List String
+    -> Result CodeSnippetChecksElement { withoutChecks : String, checks : List CodeSnippetCheck }
+elmCodeBlockChunksSplitOffChecks =
+    \chunks -> chunks |> elmCodeBlockChunksSplitOffChecksFromIndex 0
+
+
+elmCodeBlockChunksSplitOffChecksFromIndex :
+    Int
+    ->
+        (List String
+         -> Result CodeSnippetChecksElement { withoutChecks : String, checks : List CodeSnippetCheck }
+        )
+elmCodeBlockChunksSplitOffChecksFromIndex nextCheckIndex =
+    \chunks ->
+        -- IGNORE TCO
+        case chunks of
+            [] ->
+                { withoutChecks = "", checks = [] } |> Ok
+
+            [ onlyChunk ] ->
+                { withoutChecks = onlyChunk, checks = [] } |> Ok
+
+            chunk0 :: chunk1 :: chunk2Up ->
+                [ \() ->
+                    case chunk1 |> toMarked "-->" of
+                        Just expectedExpressionSource ->
+                            case expectedExpressionSource |> ElmSyntaxParse.expression of
+                                Nothing ->
+                                    EqualsKind |> Err |> Just
+
+                                Just expectedExpression ->
+                                    Equals expectedExpression
+                                        |> Ok
+                                        |> Just
+
+                        Nothing ->
+                            Nothing
+                , \() ->
+                    case chunk1 |> toMarked "--:" of
+                        Just expectedTypeSource ->
+                            case expectedTypeSource |> ElmSyntaxParse.type_ of
+                                Nothing ->
+                                    IsOfTypeKind |> Err |> Just
+
+                                Just expectedType ->
+                                    IsOfType expectedType
+                                        |> Ok
+                                        |> Just
+
+                        Nothing ->
+                            Nothing
+                ]
+                    |> List.LocalExtra.firstJustMap (\f -> f ())
+                    |> (\maybe ->
+                            case maybe of
+                                Just (Err expectationKind) ->
+                                    { checkIndex = nextCheckIndex
+                                    , part = CodeSnippetExpectation
+                                    , expectationKind = expectationKind
+                                    }
+                                        |> Err
+
+                                Just (Ok expectation) ->
+                                    case chunk0 |> ElmSyntaxParse.expression of
+                                        Nothing ->
+                                            { checkIndex = nextCheckIndex
+                                            , part = CodeSnippetCheckedExpression
+                                            , expectationKind =
+                                                case expectation of
+                                                    Equals _ ->
+                                                        EqualsKind
+
+                                                    IsOfType _ ->
+                                                        IsOfTypeKind
+                                            }
+                                                |> Err
+
+                                        Just checkedExpression ->
+                                            chunk2Up
+                                                |> elmCodeBlockChunksSplitOffChecks
+                                                |> Result.map
+                                                    (\chunk2UpSeparated ->
+                                                        { chunk2UpSeparated
+                                                            | checks =
+                                                                chunk2UpSeparated.checks
+                                                                    |> (::) { checkedExpression = checkedExpression, expectation = expectation }
+                                                        }
+                                                    )
+
+                                -- not a check
+                                Nothing ->
+                                    (chunk1 :: chunk2Up)
+                                        |> elmCodeBlockChunksSplitOffChecks
+                                        |> Result.map
+                                            (\chunk1UpSeparated ->
+                                                { chunk1UpSeparated
+                                                    | withoutChecks =
+                                                        [ chunk0, "\n\n", chunk1UpSeparated.withoutChecks ] |> String.concat
+                                                }
+                                            )
+                       )
 
 
 moduleHeaderExposed :
@@ -137,7 +277,7 @@ syntaxExposingToExposed =
                 , exposedValueAndFunctionAndTypeAliasNames =
                     list
                         |> List.filterMap
-                            (\(Node _ expose) ->
+                            (\(Elm.Syntax.Node.Node _ expose) ->
                                 case expose of
                                     Elm.Syntax.Exposing.TypeOrAliasExpose name ->
                                         name |> Just
@@ -160,7 +300,7 @@ syntaxExposingToExposed =
                 , exposedChoiceTypesExposingVariants =
                     list
                         |> List.filterMap
-                            (\(Node _ expose) ->
+                            (\(Elm.Syntax.Node.Node _ expose) ->
                                 case expose of
                                     Elm.Syntax.Exposing.TypeOrAliasExpose _ ->
                                         Nothing
@@ -189,98 +329,9 @@ syntaxExposingToExposed =
                 }
 
 
-{-| [`Rule`](https://dark.elm.dmy.fr/packages/jfmengels/elm-review/latest/Review-Rule#Rule)
-to generate tests from your documentation examples (readme, module header, declaration comment)
-and also to report syntax errors for these code snippets. There are two kinds of checks:
-
-
-### value checks
-
-    module Dict.Extra exposing (keySet)
-
-    {-| `Dict.keys` but returning a `Set` instead of a `List`.
-
-        import Dict
-        import Set
-
-        type Letter
-            = A
-            | B
-            | C
-
-        Dict.fromList [ ( 0, A ), ( 1, B ), ( 2, C ) ]
-            |> keySet
-        --> Set.fromList [ 0, 1, 2 ]
-
-        -- or
-        Dict.fromList [ ( 0, A ), ( 1, B ), ( 2, C ) ]
-            |> keySet
-        -->
-        Set.fromList
-            [ 0
-            , 1
-            , 2
-            ]
-
-        -- or
-        Dict.fromList [ ( 0, A ), ( 1, B ), ( 2, C ) ]
-            |> keySet
-        --> Set.fromList
-        -->     [ 0
-        -->     , 1
-        -->     , 2
-        -->     ]
-
-    -}
-    keySet = ...
-
-This verifies that the actual value of the expression before `-->` is the same as the expected value after `-->`.
-
-
-### type checks
-
-    module Codec exposing (Codec, record, field, recordFinish, signedInt)
-
-    {-| Start creating a codec for a record.
-
-        type alias Point =
-            { x : Int, y : Int }
-
-        Codec.record (\x y -> { x = x, y = y })
-            |> Codec.field .x Codec.signedInt
-            |> Codec.field .y Codec.signedInt
-            |> Codec.recordFinish
-        --: Codec Point
-    -}
-    record = ...
-
-**important** The rule will only report syntax and type errors
-if your code snippet contains at least one of these two checks, so replace
-
-    {-| ...
-
-        myResult : Cmd Int
-        myResult =
-            Ok 3 |> Cmd.Extra.fromResult
-
-    -}
-
-with
-
-    {-| ...
-
-        Ok 3 |> Cmd.Extra.fromResult
-        --: Cmd Int
-
-    -}
-
-Both checks will be run on _all modules_ and the readme. If you want to disable this for e.g. generated or vendored code,
-use [`Review.Rule.ignoreErrorsForDirectories`](https://dark.elm.dmy.fr/packages/jfmengels/elm-review/latest/Review-Rule#ignoreErrorsForDirectories)
-
--}
-check : Rule
-check =
-    Review.Rule.newProjectRuleSchema "Review.Documentation.CodeSnippet.check" initialProjectContext
+checkWith : ImplicitImportCurrentModuleExposing -> Review.Rule.Rule
+checkWith implicitImportCurrentModuleExposing =
+    Review.Rule.newProjectRuleSchema "Review.Documentation.CodeSnippet" initialProjectContext
         |> Review.Rule.providesFixesForProjectRule
         |> Review.Rule.withReadmeProjectVisitor
             (\maybeReadme context ->
@@ -290,7 +341,7 @@ check =
 
                     Just readme ->
                         let
-                            codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
+                            codeSnippetsAndErrors : List (Result { startRow : Int, error : LocationInCodeSnippet } CodeSnippet)
                             codeSnippetsAndErrors =
                                 readme.content |> markdownElmCodeBlocksInReadme |> List.filterMap elmCodeBlockToSnippet
                         in
@@ -308,14 +359,12 @@ check =
                                 (\error ->
                                     Review.Rule.errorForReadme
                                         readme.readmeKey
-                                        (error |> codeSnippetParseErrorInfo)
-                                        (error
-                                            |> codeSnippetParseErrorRangeIn
-                                                { raw = readme.content, start = { row = 1, column = 1 } }
-                                        )
+                                        (error.error |> codeSnippetParseErrorInfo)
+                                        { start = { row = error.startRow, column = 0 }, end = { row = error.startRow + 1, column = 0 } }
                                 )
                         , { context
-                            | readmeCodeSnippets =
+                            | readmeKey = readme.readmeKey |> Just
+                            , readmeCodeSnippets =
                                 codeSnippetsAndErrors |> List.filterMap Result.toMaybe
                           }
                         )
@@ -364,7 +413,7 @@ check =
             (\moduleRuleSchema ->
                 moduleRuleSchema
                     |> Review.Rule.withModuleDefinitionVisitor
-                        (\(Node _ moduleHeader) context ->
+                        (\(Elm.Syntax.Node.Node _ moduleHeader) context ->
                             ( []
                             , case context of
                                 TestModuleContext testModuleContext ->
@@ -402,9 +451,11 @@ check =
 
                                         Just moduleHeaderDocumentation ->
                                             let
-                                                codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
+                                                codeSnippetsAndErrors : List (Result { startRow : Int, error : LocationInCodeSnippet } CodeSnippet)
                                                 codeSnippetsAndErrors =
-                                                    moduleHeaderDocumentation |> Elm.Syntax.Node.value |> markdownElmCodeBlocksInModule |> List.filterMap elmCodeBlockToSnippet
+                                                    moduleHeaderDocumentation
+                                                        |> markdownElmCodeBlocksInModule
+                                                        |> List.filterMap elmCodeBlockToSnippet
                                             in
                                             ( codeSnippetsAndErrors
                                                 |> List.filterMap
@@ -419,13 +470,8 @@ check =
                                                 |> List.map
                                                     (\error ->
                                                         Review.Rule.error
-                                                            (error |> codeSnippetParseErrorInfo)
-                                                            (error
-                                                                |> codeSnippetParseErrorRangeIn
-                                                                    { raw = moduleHeaderDocumentation |> Elm.Syntax.Node.value
-                                                                    , start = moduleHeaderDocumentation |> Elm.Syntax.Node.range |> .start
-                                                                    }
-                                                            )
+                                                            (error.error |> codeSnippetParseErrorInfo)
+                                                            { start = { row = error.startRow, column = 0 }, end = { row = error.startRow + 1, column = 0 } }
                                                     )
                                             , { nonTestModuleContext
                                                 | headerCodeSnippets =
@@ -446,7 +492,7 @@ check =
                             )
                         )
                     |> Review.Rule.withDeclarationEnterVisitor
-                        (\(Node _ declaration) context ->
+                        (\(Elm.Syntax.Node.Node _ declaration) context ->
                             case context of
                                 TestModuleContext testModuleContext ->
                                     ( [], testModuleContext |> TestModuleContext )
@@ -458,9 +504,11 @@ check =
 
                                         Just memberDocumented ->
                                             let
-                                                codeSnippetsAndErrors : List (Result CodeSnippetParseError CodeSnippet)
+                                                codeSnippetsAndErrors : List (Result { startRow : Int, error : LocationInCodeSnippet } CodeSnippet)
                                                 codeSnippetsAndErrors =
-                                                    memberDocumented.documentation |> Elm.Syntax.Node.value |> markdownElmCodeBlocksInModule |> List.filterMap elmCodeBlockToSnippet
+                                                    memberDocumented.documentation
+                                                        |> markdownElmCodeBlocksInModule
+                                                        |> List.filterMap elmCodeBlockToSnippet
                                             in
                                             ( codeSnippetsAndErrors
                                                 |> List.filterMap
@@ -475,13 +523,8 @@ check =
                                                 |> List.map
                                                     (\error ->
                                                         Review.Rule.error
-                                                            (error |> codeSnippetParseErrorInfo)
-                                                            (error
-                                                                |> codeSnippetParseErrorRangeIn
-                                                                    { raw = memberDocumented.documentation |> Elm.Syntax.Node.value
-                                                                    , start = memberDocumented.documentation |> Elm.Syntax.Node.range |> .start
-                                                                    }
-                                                            )
+                                                            (error.error |> codeSnippetParseErrorInfo)
+                                                            { start = { row = error.startRow, column = 0 }, end = { row = error.startRow + 1, column = 0 } }
                                                     )
                                             , { nonTestModuleContext
                                                 | codeSnippetsByMember =
@@ -499,13 +542,16 @@ check =
             , fromModuleToProject = moduleToProjectContextCreator
             , foldProjectContexts = projectContextsMerge
             }
-        |> Review.Rule.withFinalProjectEvaluation checkFullProject
+        |> Review.Rule.withFinalProjectEvaluation
+            (\fullContext -> fullContext |> checkFullProject implicitImportCurrentModuleExposing)
         |> Review.Rule.fromProjectRuleSchema
 
 
-commentToModuleHeader : { resources_ | extractSourceCode : Range -> String } -> (Node String -> Maybe (Node String))
+commentToModuleHeader :
+    { resources_ | extractSourceCode : Range -> String }
+    -> (Elm.Syntax.Node.Node String -> Maybe (Elm.Syntax.Node.Node String))
 commentToModuleHeader resources =
-    \(Node commentRange comment) ->
+    \(Elm.Syntax.Node.Node commentRange comment) ->
         if comment |> String.startsWith "{-|" then
             case
                 { start = { row = commentRange.end.row + 1, column = 1 }
@@ -528,8 +574,31 @@ everythingRange =
     { start = { row = 1, column = 1 }, end = { row = 1000000, column = 1 } }
 
 
-checkFullProject : ProjectContext -> List (Review.Rule.Error { useErrorForModule : () })
-checkFullProject =
+indexthToString : Int -> String
+indexthToString index =
+    let
+        suffix : String
+        suffix =
+            case (index + 1) |> remainderBy 10 of
+                1 ->
+                    "st"
+
+                2 ->
+                    "nd"
+
+                3 ->
+                    "rd"
+
+                _ ->
+                    "th"
+    in
+    String.fromInt (index + 1) ++ suffix
+
+
+checkFullProject :
+    ImplicitImportCurrentModuleExposing
+    -> (ProjectContext -> List (Review.Rule.Error { useErrorForModule : () }))
+checkFullProject implicitImportCurrentModuleExposing =
     \context ->
         case context.documentationCodeSnippetTestModule of
             Nothing ->
@@ -543,14 +612,149 @@ checkFullProject =
 
             Just documentationCodeSnippetTestModule ->
                 let
-                    generatedTestFile : String
-                    generatedTestFile =
+                    toError : { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) } -> { info : { message : String, details : List String }, range : Range }
+                    toError =
+                        \invalid ->
+                            let
+                                pluralizedForUnknownReferences : { name : String, beNot : String }
+                                pluralizedForUnknownReferences =
+                                    case invalid.unknownReferences |> Set.size of
+                                        1 ->
+                                            { name = "name", beNot = "isn't" }
+
+                                        _ ->
+                                            { name = "names", beNot = "aren't" }
+                            in
+                            { info =
+                                { message = "documentation code snippet uses unknown references"
+                                , details =
+                                    [ [ case invalid.location of
+                                            CodeSnippetDeclarationsAndImports ->
+                                                "The declarations use"
+
+                                            CodeSnippetChecksElement codeSnippetChecksElement ->
+                                                let
+                                                    expectationInfo : { marker : String, nextDescription : String }
+                                                    expectationInfo =
+                                                        case codeSnippetChecksElement.expectationKind of
+                                                            EqualsKind ->
+                                                                { marker = "-->", nextDescription = "expression" }
+
+                                                            IsOfTypeKind ->
+                                                                { marker = "--:", nextDescription = "type" }
+                                                in
+                                                case codeSnippetChecksElement.part of
+                                                    CodeSnippetExpectation ->
+                                                        [ "The expected "
+                                                        , expectationInfo.nextDescription
+                                                        , " in the "
+                                                        , codeSnippetChecksElement.checkIndex |> indexthToString
+                                                        , " check (after the "
+                                                        , expectationInfo.marker
+                                                        , " marker) uses"
+                                                        ]
+                                                            |> String.concat
+
+                                                    CodeSnippetCheckedExpression ->
+                                                        [ "The checked expression in the "
+                                                        , codeSnippetChecksElement.checkIndex |> indexthToString
+                                                        , " check (just before the "
+                                                        , expectationInfo.marker
+                                                        , " marker) uses"
+                                                        ]
+                                                            |> String.concat
+                                      , " the "
+                                      , pluralizedForUnknownReferences.name
+                                      , " "
+                                      , invalid.unknownReferences |> Set.toList |> List.map referenceToString |> String.join " and "
+                                      , " which "
+                                      , pluralizedForUnknownReferences.beNot
+                                      , " imported or defined there."
+                                      ]
+                                        |> String.concat
+                                    , "Maybe they there's a typo or missing import? Known that no members of any of your modules are exposed by default. To implicitly expose all members from the current module, use checkImplicitlyImportingEverythingFromCurrentModule: https://dark.elm.dmy.fr/packages/lue-bird/elm-documentation-code-snippet/latest/Review-Documentation-CodeSnippet#checkImplicitlyImportingEverythingFromCurrentModule"
+                                    ]
+                                }
+                            , range = { start = { row = invalid.startRow, column = 0 }, end = { row = invalid.startRow + 1, column = 0 } }
+                            }
+
+                    testFileAndErrors : { testFile : Elm.CodeGen.File, invalidInModules : List { key : Review.Rule.ModuleKey, errors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) } }, readmeErrors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) } }
+                    testFileAndErrors =
                         { readmeCodeSnippets = context.readmeCodeSnippets
                         , exposesByModule = context.exposesByModule
-                        , codeSnippetsByModule = context.codeSnippetsByModule
+                        , codeSnippetsByModule =
+                            context.codeSnippetsByModule
+                                |> FastDict.map
+                                    (\moduleName moduleCodeSnippets ->
+                                        let
+                                            addImplicitImport : CodeSnippet -> CodeSnippet
+                                            addImplicitImport =
+                                                \codeSnippet ->
+                                                    { codeSnippet
+                                                        | imports =
+                                                            codeSnippet.imports
+                                                                |> (::)
+                                                                    (Elm.CodeGen.importStmt moduleName
+                                                                        Nothing
+                                                                        (implicitImportCurrentModuleExposing |> implicitImportCurrentModuleExposingToElm)
+                                                                    )
+                                                    }
+                                        in
+                                        { key = moduleCodeSnippets.key
+                                        , inModuleHeader =
+                                            moduleCodeSnippets.inModuleHeader |> List.map addImplicitImport
+                                        , inMembers =
+                                            moduleCodeSnippets.inMembers
+                                                |> FastDict.map
+                                                    (\_ memberCodeSnippets ->
+                                                        memberCodeSnippets |> List.map addImplicitImport
+                                                    )
+                                        }
+                                    )
                         }
-                            |> createDocumentationCodeSnippetsTestFile
-                            |> Elm.Pretty.pretty 80
+                            |> documentationCodeSnippetsTestFileAndErrors
+
+                    errors : List (Review.Rule.Error scope_)
+                    errors =
+                        (case context.readmeKey of
+                            Nothing ->
+                                []
+
+                            Just readmeKey ->
+                                testFileAndErrors.readmeErrors
+                                    |> List.map
+                                        (\invalid ->
+                                            let
+                                                errorInfo : { info : { message : String, details : List String }, range : Range }
+                                                errorInfo =
+                                                    invalid |> toError
+                                            in
+                                            Review.Rule.errorForReadme readmeKey
+                                                errorInfo.info
+                                                errorInfo.range
+                                        )
+                        )
+                            ++ (testFileAndErrors.invalidInModules
+                                    |> List.concatMap
+                                        (\invalidInModule ->
+                                            invalidInModule.errors
+                                                |> List.map
+                                                    (\invalid ->
+                                                        let
+                                                            errorInfo : { info : { message : String, details : List String }, range : Range }
+                                                            errorInfo =
+                                                                invalid |> toError
+                                                        in
+                                                        Review.Rule.errorForModule invalidInModule.key
+                                                            errorInfo.info
+                                                            errorInfo.range
+                                                    )
+                                        )
+                               )
+
+                    generatedTestFile : String
+                    generatedTestFile =
+                        testFileAndErrors.testFile |> Elm.Pretty.pretty 80
 
                     testFileRequiresChanges : Bool
                     testFileRequiresChanges =
@@ -564,7 +768,7 @@ checkFullProject =
                                 (existingFile |> Elm.Pretty.pretty 80) /= generatedTestFile
                 in
                 if testFileRequiresChanges then
-                    [ Review.Rule.errorForModuleWithFix documentationCodeSnippetTestModule.key
+                    Review.Rule.errorForModuleWithFix documentationCodeSnippetTestModule.key
                         { message = "documentation code snippet test can be added"
                         , details =
                             [ "Adding them will help verify that code blocks in your readme and module documentation work correctly."
@@ -575,10 +779,225 @@ checkFullProject =
                             everythingRange
                             generatedTestFile
                         ]
-                    ]
+                        :: errors
 
                 else
-                    []
+                    errors
+
+
+referenceToString : ( Elm.Syntax.ModuleName.ModuleName, String ) -> String
+referenceToString =
+    \( qualification, name ) ->
+        case qualification of
+            [] ->
+                name
+
+            qualificationPart0 :: qualificationPart1Up ->
+                [ qualificationPart0 :: qualificationPart1Up |> String.join "."
+                , "."
+                , name
+                ]
+                    |> String.concat
+
+
+documentationCodeSnippetsTestFileAndErrors :
+    { readmeCodeSnippets : List CodeSnippet
+    , exposesByModule :
+        Dict
+            Elm.Syntax.ModuleName.ModuleName
+            { exposedChoiceTypesExposingVariants : Dict String (Set String)
+            , exposedValueAndFunctionAndTypeAliasNames : Set String
+            }
+    , codeSnippetsByModule :
+        Dict
+            Elm.Syntax.ModuleName.ModuleName
+            { key : Review.Rule.ModuleKey
+            , inModuleHeader : List CodeSnippet
+            , inMembers : Dict String (List CodeSnippet)
+            }
+    }
+    ->
+        { testFile : Elm.CodeGen.File
+        , invalidInModules :
+            List
+                { key : Review.Rule.ModuleKey
+                , errors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) }
+                }
+        , readmeErrors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) }
+        }
+documentationCodeSnippetsTestFileAndErrors =
+    \infoRaw ->
+        let
+            codeSnippetUnknownReferences : CodeSnippet -> List { location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) }
+            codeSnippetUnknownReferences =
+                \codeSnippet ->
+                    let
+                        imports : Imports
+                        imports =
+                            Imports.implicit
+                                |> Imports.insertSyntaxImports infoRaw.exposesByModule codeSnippet.imports
+
+                        snippetLocalDeclarationNames : Set String
+                        snippetLocalDeclarationNames =
+                            codeSnippet.declarations
+                                |> Set.LocalExtra.unionFromListMap Declaration.LocalExtra.names
+
+                        referencesToUnknowns : Set ( Elm.Syntax.ModuleName.ModuleName, String ) -> Maybe (Set ( Elm.Syntax.ModuleName.ModuleName, String ))
+                        referencesToUnknowns =
+                            \allReferences ->
+                                let
+                                    unuseds : Set ( Elm.Syntax.ModuleName.ModuleName, String )
+                                    unuseds =
+                                        allReferences
+                                            |> Set.LocalExtra.justsMap
+                                                (\( qualification, unqualified ) ->
+                                                    case ( qualification, unqualified ) |> Origin.determine imports of
+                                                        Just _ ->
+                                                            Nothing
+
+                                                        Nothing ->
+                                                            if snippetLocalDeclarationNames |> Set.member unqualified then
+                                                                Nothing
+
+                                                            else
+                                                                ( qualification, unqualified ) |> Just
+                                                )
+                                in
+                                if unuseds |> Set.isEmpty then
+                                    Nothing
+
+                                else
+                                    unuseds |> Just
+                    in
+                    List.LocalExtra.consJust
+                        (codeSnippet.declarations
+                            |> Set.LocalExtra.unionFromListMap Declaration.LocalExtra.references
+                            |> referencesToUnknowns
+                            |> Maybe.map (\unknown -> { unknownReferences = unknown, location = CodeSnippetDeclarationsAndImports })
+                        )
+                        (codeSnippet.checks
+                            |> List.indexedMap
+                                (\checkIndex codeSnippetCheck ->
+                                    case codeSnippetCheck.expectation of
+                                        Equals expectedExpression ->
+                                            [ (codeSnippetCheck.checkedExpression |> Expression.LocalExtra.references |> referencesToUnknowns)
+                                                |> Maybe.map
+                                                    (\unknown ->
+                                                        { unknownReferences = unknown
+                                                        , location = CodeSnippetChecksElement { checkIndex = checkIndex, part = CodeSnippetCheckedExpression, expectationKind = EqualsKind }
+                                                        }
+                                                    )
+                                            , (expectedExpression |> Expression.LocalExtra.references |> referencesToUnknowns)
+                                                |> Maybe.map
+                                                    (\unknown ->
+                                                        { unknownReferences = unknown
+                                                        , location = CodeSnippetChecksElement { checkIndex = checkIndex, part = CodeSnippetExpectation, expectationKind = EqualsKind }
+                                                        }
+                                                    )
+                                            ]
+                                                |> List.filterMap identity
+
+                                        IsOfType expectedType ->
+                                            [ (codeSnippetCheck.checkedExpression |> Expression.LocalExtra.references |> referencesToUnknowns)
+                                                |> Maybe.map
+                                                    (\unknown ->
+                                                        { unknownReferences = unknown
+                                                        , location = CodeSnippetChecksElement { checkIndex = checkIndex, part = CodeSnippetCheckedExpression, expectationKind = IsOfTypeKind }
+                                                        }
+                                                    )
+                                            , (expectedType |> Type.LocalExtra.references |> referencesToUnknowns)
+                                                |> Maybe.map
+                                                    (\unknown ->
+                                                        { unknownReferences = unknown
+                                                        , location = CodeSnippetChecksElement { checkIndex = checkIndex, part = CodeSnippetExpectation, expectationKind = IsOfTypeKind }
+                                                        }
+                                                    )
+                                            ]
+                                                |> List.filterMap identity
+                                )
+                            |> List.concat
+                        )
+
+            codeSnippetsToValidAndErrors :
+                List CodeSnippet
+                ->
+                    { valid : List CodeSnippet
+                    , errors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) }
+                    }
+            codeSnippetsToValidAndErrors =
+                \codeSnippets ->
+                    codeSnippets
+                        |> List.foldr
+                            (\codeSnippet soFar ->
+                                let
+                                    unknowns : List { location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) }
+                                    unknowns =
+                                        codeSnippet |> codeSnippetUnknownReferences
+                                in
+                                case unknowns of
+                                    [] ->
+                                        { soFar | valid = soFar.valid |> (::) codeSnippet }
+
+                                    location0 :: location1Up ->
+                                        { soFar
+                                            | errors =
+                                                ((location0 :: location1Up)
+                                                    |> List.map (\l -> { startRow = codeSnippet.startRow, location = l.location, unknownReferences = l.unknownReferences })
+                                                )
+                                                    ++ soFar.errors
+                                        }
+                            )
+                            { errors = []
+                            , valid = []
+                            }
+
+            readmeValidAndErrors : { valid : List CodeSnippet, errors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) } }
+            readmeValidAndErrors =
+                infoRaw.readmeCodeSnippets |> codeSnippetsToValidAndErrors
+
+            modulesValidAndErrors : Dict Elm.Syntax.ModuleName.ModuleName { key : Review.Rule.ModuleKey, inModuleHeader : List CodeSnippet, inMembers : Dict String (List CodeSnippet), errors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) } }
+            modulesValidAndErrors =
+                infoRaw.codeSnippetsByModule
+                    |> FastDict.map
+                        (\_ moduleCodeSnippets ->
+                            let
+                                inModuleHeaderValidAndErrors : { valid : List CodeSnippet, errors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) } }
+                                inModuleHeaderValidAndErrors =
+                                    moduleCodeSnippets.inModuleHeader |> codeSnippetsToValidAndErrors
+
+                                inMembersValidAndErrors : Dict String { valid : List CodeSnippet, errors : List { startRow : Int, location : LocationInCodeSnippet, unknownReferences : Set ( Elm.Syntax.ModuleName.ModuleName, String ) } }
+                                inMembersValidAndErrors =
+                                    moduleCodeSnippets.inMembers |> FastDict.map (\_ codeSnippets -> codeSnippets |> codeSnippetsToValidAndErrors)
+                            in
+                            { key = moduleCodeSnippets.key
+                            , inModuleHeader = inModuleHeaderValidAndErrors.valid
+                            , inMembers = inMembersValidAndErrors |> FastDict.map (\_ -> .valid)
+                            , errors =
+                                (inMembersValidAndErrors |> FastDict.values |> List.concatMap (\validAndErr -> validAndErr.errors))
+                                    ++ inModuleHeaderValidAndErrors.errors
+                            }
+                        )
+        in
+        { testFile =
+            { readmeCodeSnippets = readmeValidAndErrors.valid
+            , exposesByModule = infoRaw.exposesByModule
+            , codeSnippetsByModule =
+                modulesValidAndErrors
+                    |> FastDict.map
+                        (\_ moduleValidAndErrors ->
+                            { key = moduleValidAndErrors.key
+                            , inModuleHeader = moduleValidAndErrors.inModuleHeader
+                            , inMembers = moduleValidAndErrors.inMembers
+                            }
+                        )
+            }
+                |> createDocumentationCodeSnippetsTestFile
+        , invalidInModules =
+            modulesValidAndErrors
+                |> FastDict.values
+                |> List.map (\v -> { key = v.key, errors = v.errors })
+        , readmeErrors = readmeValidAndErrors.errors
+        }
 
 
 elmCodeGenTestDescribe : String -> List Elm.CodeGen.Expression -> Maybe Elm.CodeGen.Expression
@@ -634,22 +1053,22 @@ createDocumentationCodeSnippetsTestFile =
                         snippetLocalDeclarationNames : Set String
                         snippetLocalDeclarationNames =
                             codeSnippet.declarations
-                                |> List.LocalExtra.setUnionMap Declaration.LocalExtra.names
+                                |> Set.LocalExtra.unionFromListMap Declaration.LocalExtra.names
 
                         referenceFullyQualifyAndAdaptLocationSuffix : ( Elm.Syntax.ModuleName.ModuleName, String ) -> ( Elm.Syntax.ModuleName.ModuleName, String )
                         referenceFullyQualifyAndAdaptLocationSuffix =
                             \( qualification, unqualifiedName ) ->
                                 case ( qualification, unqualifiedName ) |> Origin.determine imports of
-                                    [] ->
+                                    Nothing ->
                                         if snippetLocalDeclarationNames |> Set.member unqualifiedName then
                                             ( [], [ unqualifiedName, "__", locationSuffix ] |> String.concat )
 
                                         else
-                                            -- pattern variable or let
+                                            -- should already be reported by as unknown references
                                             ( [], unqualifiedName )
 
-                                    moduleNamePart0 :: moduleNamePart1Up ->
-                                        ( moduleNamePart0 :: moduleNamePart1Up, unqualifiedName )
+                                    Just moduleName ->
+                                        ( moduleName, unqualifiedName )
 
                         codeSnippetCheckFullyQualify : CodeSnippetCheck -> CodeSnippetCheck
                         codeSnippetCheckFullyQualify =
@@ -670,7 +1089,8 @@ createDocumentationCodeSnippetsTestFile =
                                                 |> IsOfType
                                 }
                     in
-                    { imports = codeSnippet.imports
+                    { startRow = codeSnippet.startRow
+                    , imports = codeSnippet.imports
                     , declarations =
                         codeSnippet.declarations
                             |> List.map
@@ -682,7 +1102,9 @@ createDocumentationCodeSnippetsTestFile =
                     , checks = codeSnippet.checks |> List.map codeSnippetCheckFullyQualify
                     }
 
-            codeSnippetsFullyQualifyAndAddLocationSuffix : String -> (List CodeSnippet -> List CodeSnippet)
+            codeSnippetsFullyQualifyAndAddLocationSuffix :
+                String
+                -> (List CodeSnippet -> List CodeSnippet)
             codeSnippetsFullyQualifyAndAddLocationSuffix locationSuffix =
                 \codeSnippetsRaw ->
                     codeSnippetsRaw
@@ -712,27 +1134,16 @@ createDocumentationCodeSnippetsTestFile =
                                 moduleNameLocationSuffix : String -> String
                                 moduleNameLocationSuffix subName =
                                     [ moduleName |> String.join "_", "__", subName ] |> String.concat
-
-                                codeSnippetAddImportLocalModuleExposingAll : CodeSnippet -> CodeSnippet
-                                codeSnippetAddImportLocalModuleExposingAll =
-                                    \codeSnippet ->
-                                        { codeSnippet
-                                            | imports =
-                                                Elm.CodeGen.importStmt moduleName Nothing (Elm.CodeGen.exposeAll |> Just)
-                                                    :: codeSnippet.imports
-                                        }
                             in
                             { key = moduleInfoRaw.key
                             , inModuleHeader =
                                 moduleInfoRaw.inModuleHeader
-                                    |> List.map codeSnippetAddImportLocalModuleExposingAll
                                     |> codeSnippetsFullyQualifyAndAddLocationSuffix (moduleNameLocationSuffix "Header")
                             , inMembers =
                                 moduleInfoRaw.inMembers
                                     |> FastDict.map
                                         (\memberName memberCodeSnippets ->
                                             memberCodeSnippets
-                                                |> List.map codeSnippetAddImportLocalModuleExposingAll
                                                 |> codeSnippetsFullyQualifyAndAddLocationSuffix (moduleNameLocationSuffix memberName)
                                         )
                             }
@@ -764,7 +1175,7 @@ createDocumentationCodeSnippetsTestFile =
                        )
                     |> List.filterMap identity
 
-            codeSnippets : List { imports : List Elm.Syntax.Import.Import, checks : List CodeSnippetCheck, declarations : List Declaration }
+            codeSnippets : List CodeSnippet
             codeSnippets =
                 readmeCodeSnippets
                     ++ (codeSnippetsByModule
@@ -784,8 +1195,8 @@ createDocumentationCodeSnippetsTestFile =
             codeSnippetUsedModules =
                 \codeSnippet ->
                     Set.union
-                        (codeSnippet.declarations |> List.LocalExtra.setUnionMap Declaration.LocalExtra.usedModules)
-                        (codeSnippet.checks |> List.LocalExtra.setUnionMap codeSnippetCheckUsedModules)
+                        (codeSnippet.declarations |> Set.LocalExtra.unionFromListMap Declaration.LocalExtra.usedModules)
+                        (codeSnippet.checks |> Set.LocalExtra.unionFromListMap codeSnippetCheckUsedModules)
 
             codeSnippetCheckUsedModules : CodeSnippetCheck -> Set Elm.Syntax.ModuleName.ModuleName
             codeSnippetCheckUsedModules =
@@ -804,7 +1215,7 @@ createDocumentationCodeSnippetsTestFile =
             (Elm.CodeGen.normalModule [ "DocumentationCodeSnippetTest" ] [ Elm.CodeGen.funExpose "tests" ])
             (Set.diff
                 (codeSnippets
-                    |> List.LocalExtra.setUnionMap codeSnippetUsedModules
+                    |> Set.LocalExtra.unionFromListMap codeSnippetUsedModules
                     |> Set.insert [ "Expect" ]
                     |> Set.insert [ "Test" ]
                 )
@@ -913,7 +1324,18 @@ codeSnippetExpectationCheckToExpectationCode =
                     (Elm.CodeGen.fqConstruct [ "Expect" ] "pass" [])
 
 
-declarationListVisitor : List (Node Elm.Syntax.Declaration.Declaration) -> (NonTestModuleContext -> NonTestModuleContext)
+implicitImportCurrentModuleExposingToElm : ImplicitImportCurrentModuleExposing -> Maybe Elm.CodeGen.Exposing
+implicitImportCurrentModuleExposingToElm =
+    \implicitImportCurrentModuleExposing ->
+        case implicitImportCurrentModuleExposing of
+            ImplicitImportCurrentModuleExposingNone ->
+                Nothing
+
+            ImplicitImportCurrentModuleExposingAll ->
+                Elm.CodeGen.exposeAll |> Just
+
+
+declarationListVisitor : List (Elm.Syntax.Node.Node Elm.Syntax.Declaration.Declaration) -> (NonTestModuleContext -> NonTestModuleContext)
 declarationListVisitor declarations =
     \context ->
         case context.exposingKind of
@@ -922,7 +1344,7 @@ declarationListVisitor declarations =
                     | exposedChoiceTypesExposingVariants =
                         declarations
                             |> List.filterMap
-                                (\(Node _ declaration) ->
+                                (\(Elm.Syntax.Node.Node _ declaration) ->
                                     case declaration of
                                         Elm.Syntax.Declaration.CustomTypeDeclaration choiceTypeDeclaration ->
                                             let
@@ -937,7 +1359,7 @@ declarationListVisitor declarations =
                                                 Just _ ->
                                                     ( declaredName
                                                     , choiceTypeDeclaration.constructors
-                                                        |> List.map (\(Node _ variant) -> variant.name |> Elm.Syntax.Node.value)
+                                                        |> List.map (\(Elm.Syntax.Node.Node _ variant) -> variant.name |> Elm.Syntax.Node.value)
                                                         |> Set.fromList
                                                     )
                                                         |> Just
@@ -953,7 +1375,7 @@ declarationListVisitor declarations =
                     | exposedChoiceTypesExposingVariants =
                         declarations
                             |> List.filterMap
-                                (\(Node _ declaration) ->
+                                (\(Elm.Syntax.Node.Node _ declaration) ->
                                     case declaration of
                                         Elm.Syntax.Declaration.CustomTypeDeclaration choiceTypeDeclaration ->
                                             let
@@ -968,7 +1390,7 @@ declarationListVisitor declarations =
                                                 Nothing ->
                                                     ( declaredName
                                                     , choiceTypeDeclaration.constructors
-                                                        |> List.map (\(Node _ variant) -> variant.name |> Elm.Syntax.Node.value)
+                                                        |> List.map (\(Elm.Syntax.Node.Node _ variant) -> variant.name |> Elm.Syntax.Node.value)
                                                         |> Set.fromList
                                                     )
                                                         |> Just
@@ -980,7 +1402,7 @@ declarationListVisitor declarations =
                     , exposedValueAndFunctionAndTypeAliasNames =
                         declarations
                             |> List.filterMap
-                                (\(Node _ declaration) ->
+                                (\(Elm.Syntax.Node.Node _ declaration) ->
                                     case declaration of
                                         Elm.Syntax.Declaration.CustomTypeDeclaration _ ->
                                             Nothing
@@ -1024,10 +1446,10 @@ moduleDocsValueAndFunctionAndTypeAliasNames =
             |> Set.fromList
 
 
-markdownElmCodeBlocksInModule : String -> List String
+markdownElmCodeBlocksInModule : Elm.Syntax.Node.Node String -> List { startRow : Int, body : String }
 markdownElmCodeBlocksInModule =
-    \readmeString ->
-        readmeString
+    \(Elm.Syntax.Node.Node documentationRange documentationString) ->
+        documentationString
             |> RoughMarkdown.parse
             |> RoughMarkdown.foldl
                 (\markdownBlock soFar ->
@@ -1044,13 +1466,13 @@ markdownElmCodeBlocksInModule =
                         RoughMarkdown.CodeBlock codeBlock ->
                             case codeBlock.language of
                                 Nothing ->
-                                    soFar |> (::) codeBlock.body
+                                    soFar |> (::) { startRow = documentationRange.start.row + codeBlock.startRow - 1, body = codeBlock.body }
 
                                 Just "elm" ->
-                                    soFar |> (::) codeBlock.body
+                                    soFar |> (::) { startRow = documentationRange.start.row + codeBlock.startRow - 1, body = codeBlock.body }
 
                                 Just "" ->
-                                    soFar |> (::) codeBlock.body
+                                    soFar |> (::) { startRow = documentationRange.start.row + codeBlock.startRow - 1, body = codeBlock.body }
 
                                 Just _ ->
                                     soFar
@@ -1059,7 +1481,7 @@ markdownElmCodeBlocksInModule =
             |> List.reverse
 
 
-markdownElmCodeBlocksInReadme : String -> List String
+markdownElmCodeBlocksInReadme : String -> List { startRow : Int, body : String }
 markdownElmCodeBlocksInReadme =
     \documentationString ->
         documentationString
@@ -1082,7 +1504,7 @@ markdownElmCodeBlocksInReadme =
                                     soFar
 
                                 Just "elm" ->
-                                    soFar |> (::) codeBlock.body
+                                    soFar |> (::) { startRow = codeBlock.startRow, body = codeBlock.body }
 
                                 Just _ ->
                                     soFar
@@ -1096,6 +1518,7 @@ initialProjectContext =
     { documentationCodeSnippetTestModule = Nothing
     , exposesByModule = FastDict.empty
     , codeSnippetsByModule = FastDict.empty
+    , readmeKey = Nothing
     , readmeCodeSnippets = []
     }
 
@@ -1144,6 +1567,13 @@ projectContextsMerge a b =
                 b.documentationCodeSnippetTestModule
     , exposesByModule = FastDict.union a.exposesByModule b.exposesByModule
     , codeSnippetsByModule = FastDict.union a.codeSnippetsByModule b.codeSnippetsByModule
+    , readmeKey =
+        case a.readmeKey of
+            Just readmeKey ->
+                readmeKey |> Just
+
+            Nothing ->
+                b.readmeKey
     , readmeCodeSnippets = a.readmeCodeSnippets ++ b.readmeCodeSnippets
     }
 
@@ -1158,6 +1588,7 @@ moduleToProjectContextCreator =
                         { key = testModuleKey, source = extractSourceCode everythingRange } |> Just
                     , exposesByModule = FastDict.empty
                     , codeSnippetsByModule = FastDict.empty
+                    , readmeKey = Nothing
                     , readmeCodeSnippets = []
                     }
 
@@ -1174,6 +1605,7 @@ moduleToProjectContextCreator =
                             , inModuleHeader = nonTestModuleContext.headerCodeSnippets
                             , inMembers = nonTestModuleContext.codeSnippetsByMember
                             }
+                    , readmeKey = Nothing
                     , readmeCodeSnippets = []
                     }
         )
@@ -1182,7 +1614,7 @@ moduleToProjectContextCreator =
         |> Review.Rule.withSourceCodeExtractor
 
 
-declarationToDocumented : Declaration -> Maybe { name : String, documentation : Node String }
+declarationToDocumented : Declaration -> Maybe { name : String, documentation : Elm.Syntax.Node.Node String }
 declarationToDocumented declaration =
     case declaration of
         Elm.Syntax.Declaration.FunctionDeclaration valueOrFunctionDeclaration ->
@@ -1225,115 +1657,67 @@ declarationToDocumented declaration =
             Nothing
 
 
-codeSnippetParseErrorInfo : CodeSnippetParseError -> { message : String, details : List String }
+codeSnippetParseErrorInfo : LocationInCodeSnippet -> { message : String, details : List String }
 codeSnippetParseErrorInfo =
     \codeSnippetParseError ->
         case codeSnippetParseError of
-            CodeSnippetDeclarationsAndImportsParseError _ ->
+            CodeSnippetDeclarationsAndImports ->
                 { message = "code snippet parsing failed"
                 , details =
-                    [ "I expected to find syntactically valid elm code here but something is off with the imports/declarations/checked expressions."
+                    [ "I expected to find syntactically valid elm code here but something is off with the imports/declarations."
                     , "If you don't see an obvious mistake, try moving the code to an elm module and see where the compiler complains."
                     ]
                 }
 
-            CodeSnippetExpectationParseError _ ->
-                { message = "code snippet expectation parsing failed"
-                , details =
-                    [ "I found an expectation marker --> or --:, so I expected a syntactically valid expression or type next."
-                    , "If you don't see an obvious mistake, try moving the code to an elm module and see where the compiler complains."
-                    ]
-                }
+            CodeSnippetChecksElement checkParseError ->
+                let
+                    expectationInfo : { marker : String, nextDescription : String }
+                    expectationInfo =
+                        case checkParseError.expectationKind of
+                            EqualsKind ->
+                                { marker = "-->", nextDescription = "expression" }
+
+                            IsOfTypeKind ->
+                                { marker = "--:", nextDescription = "type" }
+                in
+                case checkParseError.part of
+                    CodeSnippetExpectation ->
+                        { message = "code snippet expectation parsing failed"
+                        , details =
+                            [ [ "Whenever I see the expectation marker "
+                              , expectationInfo.marker
+                              , ", I expect a syntactically valid "
+                              , expectationInfo.nextDescription
+                              , " next. However, I wasn't able to parse what comes after the "
+                              , checkParseError.checkIndex |> indexthToString
+                              , " marker among all checks."
+                              ]
+                                |> String.concat
+                            , "If you don't see an obvious mistake, try moving the code to an elm module and see where the compiler complains."
+                            ]
+                        }
+
+                    CodeSnippetCheckedExpression ->
+                        { message = "code snippet expected expression parsing failed"
+                        , details =
+                            [ [ "Whenever I see the expectation marker "
+                              , expectationInfo.marker
+                              , ", I expect a syntactically valid expression just before it. However, I wasn't able to parse what comes before the "
+                              , checkParseError.checkIndex |> indexthToString
+                              , " marker among all checks."
+                              ]
+                                |> String.concat
+                            , "If you don't see an obvious mistake, try moving the code to an elm module and see where the compiler complains."
+                            ]
+                        }
 
 
-rangeFrom : Location -> (Range -> Range)
-rangeFrom offsetLocation =
-    \range ->
-        { start = range.start |> locationFrom offsetLocation
-        , end = range.end |> locationFrom offsetLocation
-        }
-
-
-locationFrom : Location -> (Location -> Location)
-locationFrom offsetLocation =
-    \location ->
-        case location.row of
-            1 ->
-                { row = offsetLocation.row
-                , column = offsetLocation.column + location.column - 1
-                }
-
-            startRowAtLeast2 ->
-                { row = offsetLocation.row + startRowAtLeast2 - 1
-                , column = location.column
-                }
-
-
-codeSnippetParseErrorRangeIn : { raw : String, start : Location } -> (CodeSnippetParseError -> Range)
-codeSnippetParseErrorRangeIn documentation =
-    \parseError ->
-        let
-            relativeRange : Range
-            relativeRange =
-                case parseError of
-                    CodeSnippetDeclarationsAndImportsParseError fullDeclarationsAndImportsToFind ->
-                        documentation.raw
-                            |> stringRangeOfString
-                                (fullDeclarationsAndImportsToFind
-                                    |> String.split "\n"
-                                    |> List.head
-                                    -- never returned by String.split
-                                    |> Maybe.withDefault fullDeclarationsAndImportsToFind
-                                )
-
-                    CodeSnippetExpectationParseError toFind ->
-                        documentation.raw |> stringRangeOfString (toFind |> String.trimLeft)
-        in
-        relativeRange |> rangeFrom documentation.start
-
-
-stringRangeOfString : String -> (String -> Range)
-stringRangeOfString toFind =
-    \string ->
-        case string |> String.split toFind of
-            -- never returned by String.split
-            [] ->
-                { start = { row = 1, column = 1 }, end = { row = 2, column = 1 } }
-
-            beforeToFind :: _ ->
-                toFind
-                    |> stringRange
-                    |> rangeFrom (beforeToFind |> stringRange |> .end)
-
-
-stringRange : String -> Range
-stringRange =
-    \string ->
-        let
-            lines : List String
-            lines =
-                string |> String.split "\n"
-        in
-        { start = { row = 1, column = 1 }
-        , end =
-            case lines |> List.LocalExtra.last of
-                Nothing ->
-                    { row = 1, column = 1 }
-
-                Just beforeToFindLastLine ->
-                    { row = lines |> List.length
-                    , column =
-                        (beforeToFindLastLine |> String.length) + 1
-                    }
-        }
-
-
-elmCodeBlockToSnippet : String -> Maybe (Result CodeSnippetParseError CodeSnippet)
+elmCodeBlockToSnippet : { startRow : Int, body : String } -> Maybe (Result { startRow : Int, error : LocationInCodeSnippet } CodeSnippet)
 elmCodeBlockToSnippet =
     \elmCode ->
-        case elmCode |> elmCodeBlockSplitOffChecks of
+        case elmCode.body |> elmCodeBlockSplitOffChecks of
             Err toFind ->
-                CodeSnippetExpectationParseError toFind |> Err |> Just
+                { startRow = elmCode.startRow, error = CodeSnippetChecksElement toFind } |> Err |> Just
 
             Ok split ->
                 case split.checks of
@@ -1343,10 +1727,13 @@ elmCodeBlockToSnippet =
                     check0 :: check1Up ->
                         case split.withoutChecks |> ElmSyntaxParse.importsAndDeclarations of
                             Nothing ->
-                                CodeSnippetDeclarationsAndImportsParseError split.withoutChecks |> Err |> Just
+                                { startRow = elmCode.startRow, error = CodeSnippetDeclarationsAndImports }
+                                    |> Err
+                                    |> Just
 
                             Just importsAndDeclarations ->
-                                { imports = importsAndDeclarations.imports
+                                { startRow = elmCode.startRow
+                                , imports = importsAndDeclarations.imports
                                 , declarations = importsAndDeclarations.declarations
                                 , checks = check0 :: check1Up
                                 }
@@ -1354,40 +1741,9 @@ elmCodeBlockToSnippet =
                                     |> Just
 
 
-toMarked : String -> (String -> Maybe String)
-toMarked mark =
-    \string ->
-        case string |> String.split "\n" |> List.LocalExtra.allJustMap (stringToWithoutStart mark) of
-            Just linesWithoutStart ->
-                linesWithoutStart |> String.join "\n" |> Just
-
-            Nothing ->
-                case string |> stringToWithoutStart (mark ++ "\n") of
-                    Just linesWithoutStart ->
-                        linesWithoutStart |> Just
-
-                    Nothing ->
-                        Nothing
-
-
-stringToWithoutStart : String -> (String -> Maybe String)
-stringToWithoutStart start =
-    \string ->
-        let
-            stringTrimmedLeft : String
-            stringTrimmedLeft =
-                string |> String.trimLeft
-        in
-        if stringTrimmedLeft |> String.startsWith start then
-            stringTrimmedLeft
-                |> String.dropLeft (start |> String.length)
-                |> Just
-
-        else
-            Nothing
-
-
-elmCodeBlockSplitOffChecks : String -> Result String { withoutChecks : String, checks : List CodeSnippetCheck }
+elmCodeBlockSplitOffChecks :
+    String
+    -> Result CodeSnippetChecksElement { withoutChecks : String, checks : List CodeSnippetCheck }
 elmCodeBlockSplitOffChecks =
     \elmCodeBlock ->
         let
@@ -1506,70 +1862,170 @@ codeBlockToChunks =
             |> List.map .content
 
 
-elmCodeBlockChunksSplitOffChecks : List String -> Result String { withoutChecks : String, checks : List CodeSnippetCheck }
-elmCodeBlockChunksSplitOffChecks chunks =
-    -- IGNORE TCO
-    case chunks of
-        [] ->
-            { withoutChecks = "", checks = [] } |> Ok
+{-| A version of [`check`](#check)
+primarily intended to offer compatibility with [`elm-verify-examples`](https://github.com/stoeffel/elm-verify-examples)
+for legacy codebases.
 
-        [ onlyChunk ] ->
-            { withoutChecks = onlyChunk, checks = [] } |> Ok
+It will implicitly interpret
 
-        chunk0 :: chunk1 :: chunk2Up ->
-            case chunk0 |> ElmSyntaxParse.expression of
-                Nothing ->
-                    (chunk1 :: chunk2Up)
-                        |> elmCodeBlockChunksSplitOffChecks
-                        |> Result.map
-                            (\chunk1Up ->
-                                { chunk1Up | withoutChecks = [ chunk0, "\n\n", chunk1Up.withoutChecks ] |> String.concat }
-                            )
+    module CurrentModule exposing (doSomething)
 
-                Just checked ->
-                    chunk2Up
-                        |> elmCodeBlockChunksSplitOffChecks
-                        |> Result.andThen
-                            (\chunk2UpSeparated ->
-                                case chunk1 |> toMarked "-->" of
-                                    Just expectedExpressionSource ->
-                                        case expectedExpressionSource |> ElmSyntaxParse.expression of
-                                            Nothing ->
-                                                expectedExpressionSource |> Err
+    {-| Does something
 
-                                            Just expectedExpression ->
-                                                { chunk2UpSeparated
-                                                    | checks =
-                                                        chunk2UpSeparated.checks
-                                                            |> (::) { checkedExpression = checked, expectation = Equals expectedExpression }
-                                                }
-                                                    |> Ok
+        doSomething --> "something was done"
 
-                                    Nothing ->
-                                        case chunk1 |> toMarked "--:" of
-                                            Just expectedTypeSource ->
-                                                case expectedTypeSource |> ElmSyntaxParse.type_ of
-                                                    Nothing ->
-                                                        expectedTypeSource |> Err
+    -}
+    doSomething
 
-                                                    Just expectedType ->
-                                                        { chunk2UpSeparated
-                                                            | checks =
-                                                                chunk2UpSeparated.checks
-                                                                    |> (::) { checkedExpression = checked, expectation = IsOfType expectedType }
-                                                        }
-                                                            |> Ok
+as
 
-                                            Nothing ->
-                                                -- not a check
-                                                { chunk2UpSeparated
-                                                    | withoutChecks =
-                                                        [ chunk0, "\n\n", chunk1, "\n\n", chunk2UpSeparated.withoutChecks ] |> String.concat
-                                                }
-                                                    |> Ok
-                            )
+    module CurrentModule exposing (doSomething)
+
+    {-| Does something
+
+        import CurrentModule exposing (..)
+
+        doSomething --> "something was done"
+
+    -}
+    doSomething
+
+History: This was the previous behaviour of the rule in version 1.
+[Shadowing issues](https://github.com/lue-bird/elm-review-documentation-code-snippet/issues/2)
+initiated the search for better alternatives.
+Requiring explicit imports for exposing members of the current module turned out to
+make the snippets easier to understand, easier to copy into your code
+and less error prone.
+See above linked issue to see considered alternatives or suggest one yourself.
+
+-}
+checkImplicitlyImportingEverythingFromCurrentModule : Review.Rule.Rule
+checkImplicitlyImportingEverythingFromCurrentModule =
+    checkWith ImplicitImportCurrentModuleExposingAll
 
 
-type CodeSnippetParseError
-    = CodeSnippetExpectationParseError String
-    | CodeSnippetDeclarationsAndImportsParseError String
+{-| [`Rule`](https://dark.elm.dmy.fr/packages/jfmengels/elm-review/latest/Review-Rule#Rule)
+to generate tests from your documentation examples (readme, module header, declaration comment)
+and also to report syntax errors for these code snippets. There are two kinds of checks:
+
+
+### value checks
+
+    module Dict.Extra exposing (keySet)
+
+    {-| `Dict.keys` but returning a `Set` instead of a `List`.
+
+        import Dict
+        import Set
+
+        type Letter
+            = A
+            | B
+            | C
+
+        Dict.fromList [ ( 0, A ), ( 1, B ), ( 2, C ) ]
+            |> Dict.Extra.keySet
+        --> Set.fromList [ 0, 1, 2 ]
+
+        -- or
+        Dict.fromList [ ( 0, A ), ( 1, B ), ( 2, C ) ]
+            |> Dict.Extra.keySet
+        -->
+        Set.fromList
+            [ 0
+            , 1
+            , 2
+            ]
+
+        -- or
+        Dict.fromList [ ( 0, A ), ( 1, B ), ( 2, C ) ]
+            |> Dict.Extra.keySet
+        --> Set.fromList
+        -->     [ 0
+        -->     , 1
+        -->     , 2
+        -->     ]
+
+    -}
+    keySet = ...
+
+This verifies that the actual value of the expression before `-->` is the same as the expected value after `-->`.
+
+
+### type checks
+
+    module Codec exposing (Codec, record, field, recordFinish, signedInt)
+
+    {-| Start creating a codec for a record.
+
+        import Codec exposing (Codec)
+
+        type alias Point =
+            { x : Int, y : Int }
+
+        Codec.record (\x y -> { x = x, y = y })
+            |> Codec.field .x Codec.signedInt
+            |> Codec.field .y Codec.signedInt
+            |> Codec.recordFinish
+        --: Codec Point
+    -}
+    record = ...
+
+Note that because you use the type `Codec` _unqualified_ in your check,
+you have to _explicitly import_ it.
+(This is different from [`elm-verify-examples`](https://github.com/stoeffel/elm-verify-examples)
+which implicitly exposes all local module members.
+In case you want to simulate that behaviour for legacy reasons, use [`checkImplicitlyImportingEverythingFromCurrentModule`](#checkImplicitlyImportingEverythingFromCurrentModule))
+
+**important** The rule will only report syntax and type errors
+if your code snippet contains at least one of these two checks, so replace
+
+    {-| ...
+
+        myResult : Cmd Int
+        myResult =
+            Ok 3 |> Cmd.Extra.fromResult
+
+    -}
+
+with
+
+    {-| ...
+
+        Ok 3 |> Cmd.Extra.fromResult
+        --: Cmd Int
+
+    -}
+
+Both checks will be run on _all modules_ and the readme. If you want to disable this for e.g. generated or vendored code,
+use [`Review.Rule.ignoreErrorsForDirectories`](https://dark.elm.dmy.fr/packages/jfmengels/elm-review/latest/Review-Rule#ignoreErrorsForDirectories)
+
+-}
+check : Review.Rule.Rule
+check =
+    checkWith ImplicitImportCurrentModuleExposingNone
+
+
+type ImplicitImportCurrentModuleExposing
+    = ImplicitImportCurrentModuleExposingNone
+    | ImplicitImportCurrentModuleExposingAll
+
+
+type LocationInCodeSnippet
+    = CodeSnippetChecksElement CodeSnippetChecksElement
+    | CodeSnippetDeclarationsAndImports
+
+
+type alias CodeSnippetChecksElement =
+    RecordWithoutConstructorFunction
+        { checkIndex : Int, part : CodeSnippetCheckPart, expectationKind : CodeSnippetExpectationKind }
+
+
+type CodeSnippetCheckPart
+    = CodeSnippetExpectation
+    | CodeSnippetCheckedExpression
+
+
+type CodeSnippetExpectationKind
+    = EqualsKind
+    | IsOfTypeKind

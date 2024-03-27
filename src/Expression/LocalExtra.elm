@@ -1,11 +1,11 @@
-module Expression.LocalExtra exposing (references, referencesAlter, usedModules)
+module Expression.LocalExtra exposing (nodeReferencesWithBranchLocalVariables, references, referencesAlter, usedModules)
 
 import Elm.Syntax.Expression exposing (Expression)
 import Elm.Syntax.ModuleName
-import Elm.Syntax.Node exposing (Node(..))
-import List.LocalExtra
+import Elm.Syntax.Node
 import Pattern.LocalExtra
 import Set exposing (Set)
+import Set.LocalExtra
 import Type.LocalExtra
 
 
@@ -105,7 +105,7 @@ map expressionChange =
     -- IGNORE TCO
     \expression ->
         let
-            step : Node Expression -> Node Expression
+            step : Elm.Syntax.Node.Node Expression -> Elm.Syntax.Node.Node Expression
             step =
                 Elm.Syntax.Node.map (\stepExpression -> stepExpression |> map expressionChange)
         in
@@ -216,70 +216,123 @@ usedModules =
             |> Set.remove []
 
 
-references : Expression -> Set ( Elm.Syntax.ModuleName.ModuleName, String )
-references =
+referencesWithBranchLocalVariables : Set String -> (Expression -> Set ( Elm.Syntax.ModuleName.ModuleName, String ))
+referencesWithBranchLocalVariables branchLocalVariables =
     -- IGNORE TCO
     \expression ->
-        Set.union
-            (expression
-                |> subs
-                |> List.LocalExtra.setUnionMap
-                    (\(Node _ innerExpression) ->
-                        innerExpression |> references
-                    )
-            )
-            (case expression of
-                Elm.Syntax.Expression.FunctionOrValue qualification unqualifiedName ->
+        case expression of
+            Elm.Syntax.Expression.FunctionOrValue qualification unqualifiedName ->
+                if (qualification |> List.isEmpty) && (branchLocalVariables |> Set.member unqualifiedName) then
+                    Set.empty
+
+                else
                     ( qualification, unqualifiedName ) |> Set.singleton
 
-                Elm.Syntax.Expression.LambdaExpression lambda ->
-                    lambda.args |> List.LocalExtra.setUnionMap Pattern.LocalExtra.nodeReferences
+            Elm.Syntax.Expression.LambdaExpression lambda ->
+                Set.union
+                    (lambda.args |> Set.LocalExtra.unionFromListMap Pattern.LocalExtra.nodeReferences)
+                    (lambda.expression
+                        |> nodeReferencesWithBranchLocalVariables
+                            (Set.union branchLocalVariables
+                                (lambda.args
+                                    |> Set.LocalExtra.unionFromListMap
+                                        (\patternNode -> patternNode |> Pattern.LocalExtra.nodeVariables)
+                                )
+                            )
+                    )
 
-                Elm.Syntax.Expression.CaseExpression caseOf ->
-                    caseOf.cases
-                        |> List.LocalExtra.setUnionMap
-                            (\( Node _ pattern, _ ) -> pattern |> Pattern.LocalExtra.references)
+            Elm.Syntax.Expression.CaseExpression caseOf ->
+                Set.union
+                    (caseOf.expression |> nodeReferencesWithBranchLocalVariables branchLocalVariables)
+                    (caseOf.cases
+                        |> Set.LocalExtra.unionFromListMap
+                            (\( patternNode, caseExpressionNode ) ->
+                                Set.union
+                                    (patternNode |> Pattern.LocalExtra.nodeReferences)
+                                    (caseExpressionNode
+                                        |> nodeReferencesWithBranchLocalVariables
+                                            (Set.union branchLocalVariables
+                                                (patternNode |> Pattern.LocalExtra.nodeVariables)
+                                            )
+                                    )
+                            )
+                    )
 
-                Elm.Syntax.Expression.LetExpression letIn ->
-                    letIn.declarations
-                        |> List.LocalExtra.setUnionMap
-                            (\(Node _ letDeclaration) ->
+            Elm.Syntax.Expression.LetExpression letIn ->
+                let
+                    variablesForWholeLetIn : Set String
+                    variablesForWholeLetIn =
+                        Set.union branchLocalVariables
+                            (letIn.declarations
+                                |> Set.LocalExtra.unionFromListMap
+                                    (\(Elm.Syntax.Node.Node _ letDeclaration) ->
+                                        case letDeclaration of
+                                            Elm.Syntax.Expression.LetFunction letFunction ->
+                                                letFunction.declaration
+                                                    |> Elm.Syntax.Node.value
+                                                    |> .name
+                                                    |> Elm.Syntax.Node.value
+                                                    |> Set.singleton
+
+                                            Elm.Syntax.Expression.LetDestructuring patternNode _ ->
+                                                patternNode |> Pattern.LocalExtra.nodeVariables
+                                    )
+                            )
+                in
+                Set.union
+                    (letIn.expression |> nodeReferencesWithBranchLocalVariables variablesForWholeLetIn)
+                    (letIn.declarations
+                        |> Set.LocalExtra.unionFromListMap
+                            (\(Elm.Syntax.Node.Node _ letDeclaration) ->
                                 case letDeclaration of
-                                    Elm.Syntax.Expression.LetDestructuring (Node _ pattern) _ ->
-                                        pattern |> Pattern.LocalExtra.references
+                                    Elm.Syntax.Expression.LetDestructuring patternNode destructuredExpressionNode ->
+                                        Set.union
+                                            (patternNode |> Pattern.LocalExtra.nodeReferences)
+                                            (destructuredExpressionNode |> nodeReferencesWithBranchLocalVariables variablesForWholeLetIn)
 
                                     Elm.Syntax.Expression.LetFunction letValueOrFunctionDeclaration ->
-                                        Set.union
-                                            (case letValueOrFunctionDeclaration.signature of
-                                                Nothing ->
-                                                    Set.empty
+                                        [ case letValueOrFunctionDeclaration.signature of
+                                            Nothing ->
+                                                Set.empty
 
-                                                Just (Node _ signature) ->
-                                                    signature.typeAnnotation
-                                                        |> Type.LocalExtra.nodeReferences
-                                            )
-                                            (letValueOrFunctionDeclaration.declaration
-                                                |> Elm.Syntax.Node.value
-                                                |> .arguments
-                                                |> List.LocalExtra.setUnionMap (\(Node _ pattern) -> pattern |> Pattern.LocalExtra.references)
-                                            )
+                                            Just (Elm.Syntax.Node.Node _ signature) ->
+                                                signature.typeAnnotation
+                                                    |> Type.LocalExtra.nodeReferences
+                                        , letValueOrFunctionDeclaration.declaration
+                                            |> Elm.Syntax.Node.value
+                                            |> .arguments
+                                            |> Set.LocalExtra.unionFromListMap Pattern.LocalExtra.nodeReferences
+                                        , (letValueOrFunctionDeclaration.declaration |> Elm.Syntax.Node.value |> .expression)
+                                            |> nodeReferencesWithBranchLocalVariables
+                                                (Set.union variablesForWholeLetIn
+                                                    (letValueOrFunctionDeclaration.declaration
+                                                        |> Elm.Syntax.Node.value
+                                                        |> .arguments
+                                                        |> Set.LocalExtra.unionFromListMap
+                                                            (\patternNode -> patternNode |> Pattern.LocalExtra.nodeVariables)
+                                                    )
+                                                )
+                                        ]
+                                            |> Set.LocalExtra.unionFromList
                             )
+                    )
 
-                _ ->
-                    Set.empty
-            )
+            nonUnqualifiedReferenceOrVariable ->
+                nonUnqualifiedReferenceOrVariable
+                    |> subs
+                    |> Set.LocalExtra.unionFromListMap (nodeReferencesWithBranchLocalVariables branchLocalVariables)
 
 
 {-| Get all immediate child expressions of an expression
 -}
-subs : Expression -> List (Node Expression)
+subs : Expression -> List (Elm.Syntax.Node.Node Expression)
 subs expression =
     case expression of
         Elm.Syntax.Expression.LetExpression letBlock ->
             letBlock.expression
                 :: (letBlock.declarations
                         |> List.map
-                            (\(Node _ letDeclaration) ->
+                            (\(Elm.Syntax.Node.Node _ letDeclaration) ->
                                 case letDeclaration of
                                     Elm.Syntax.Expression.LetFunction letFunction ->
                                         letFunction.declaration |> Elm.Syntax.Node.value |> .expression
@@ -296,10 +349,10 @@ subs expression =
             expressions
 
         Elm.Syntax.Expression.RecordExpr fields ->
-            fields |> List.map (\(Node _ ( _, value )) -> value)
+            fields |> List.map (\(Elm.Syntax.Node.Node _ ( _, value )) -> value)
 
         Elm.Syntax.Expression.RecordUpdateExpression _ setters ->
-            setters |> List.map (\(Node _ ( _, newValue )) -> newValue)
+            setters |> List.map (\(Elm.Syntax.Node.Node _ ( _, newValue )) -> newValue)
 
         Elm.Syntax.Expression.RecordAccess recordToAccess _ ->
             [ recordToAccess ]
@@ -358,3 +411,14 @@ subs expression =
 
         Elm.Syntax.Expression.PrefixOperator _ ->
             []
+
+
+references : Expression -> Set ( Elm.Syntax.ModuleName.ModuleName, String )
+references =
+    \expression -> expression |> referencesWithBranchLocalVariables Set.empty
+
+
+nodeReferencesWithBranchLocalVariables : Set String -> (Elm.Syntax.Node.Node Expression -> Set ( Elm.Syntax.ModuleName.ModuleName, String ))
+nodeReferencesWithBranchLocalVariables branchLocalVariables =
+    \(Elm.Syntax.Node.Node _ expression) ->
+        expression |> referencesWithBranchLocalVariables branchLocalVariables

@@ -3,7 +3,7 @@ module FastDict.LocalExtra exposing (firstJustMap)
 import FastDict exposing (Dict)
 
 
-firstJustMap : (key -> value -> Maybe mapped) -> Dict key value -> Maybe mapped
+firstJustMap : (key -> value -> Maybe mapped) -> (Dict key value -> Maybe mapped)
 firstJustMap mapToMaybe =
     \dict ->
         dict

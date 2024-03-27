@@ -50,7 +50,7 @@ type RawBlock
     | RawUnorderedListBlock Bool Int (List CloseListItem) OpenListItem
     | RawOrderedListBlock Bool Int OrderedListMarker Int (List (List RawBlock)) String
     | RawCodeBlock CodeBlock
-    | RawIndentedCodeBlock String
+    | RawIndentedCodeBlock { startRow : Int, body : String }
     | RawBlankLine
 
 
@@ -60,7 +60,7 @@ type Block
     = UnorderedList ListSpacing (List (ListItem Block))
     | OrderedList ListSpacing Int (List (List Block))
     | Paragraph String
-    | CodeBlock { body : String, language : Maybe String }
+    | CodeBlock { startRow : Int, body : String, language : Maybe String }
 
 
 {-| Based on the whitespace around lists, markdown will wrap each list item with a paragraph (if it's a `Loose` list) or it won't (if it's a `Tight` list).
@@ -253,8 +253,12 @@ parseInlines linkReferences rawBlock =
         RawBlankLine ->
             EmptyBlock
 
-        RawIndentedCodeBlock codeBlockBody ->
-            CodeBlock { body = codeBlockBody, language = Nothing }
+        RawIndentedCodeBlock rawIndentedCodeBlock ->
+            CodeBlock
+                { startRow = rawIndentedCodeBlock.startRow
+                , body = rawIndentedCodeBlock.body
+                , language = Nothing
+                }
                 |> ParsedBlock
 
 
@@ -374,7 +378,8 @@ completeOrMergeBlocks state newRawBlock =
                 { linkReferenceDefinitions = state.linkReferenceDefinitions
                 , rawBlocks =
                     RawCodeBlock
-                        { body = [ block2.body, "\n", block1.body ] |> String.concat
+                        { startRow = block2.startRow
+                        , body = [ block2.body, "\n", block1.body ] |> String.concat
                         , language = Nothing
                         }
                         :: rest
@@ -384,7 +389,10 @@ completeOrMergeBlocks state newRawBlock =
             succeed
                 { linkReferenceDefinitions = state.linkReferenceDefinitions
                 , rawBlocks =
-                    RawIndentedCodeBlock ([ block2, "\n", block1 ] |> String.concat)
+                    RawIndentedCodeBlock
+                        { startRow = block2.startRow
+                        , body = [ block2.body, "\n", block1.body ] |> String.concat
+                        }
                         :: rest
                 }
 
@@ -392,7 +400,7 @@ completeOrMergeBlocks state newRawBlock =
             succeed
                 { linkReferenceDefinitions = state.linkReferenceDefinitions
                 , rawBlocks =
-                    RawIndentedCodeBlock (block ++ "\n\n")
+                    RawIndentedCodeBlock { startRow = block.startRow, body = block.body ++ "\n\n" }
                         :: rest
                 }
 
@@ -948,7 +956,8 @@ mergeableBlockNotAfterOpenBlockOrParagraphParser =
 
 indentedCodeBlock : Parser RawBlock
 indentedCodeBlock =
-    succeed RawIndentedCodeBlock
+    succeed (\startRow body -> { startRow = startRow, body = body } |> RawIndentedCodeBlock)
+        |= Parser.Advanced.getRow
         |. exactlyFourSpaces
         |= getChompedString Parser.LocalExtra.chompUntilLineEndOrEnd
         |. Parser.LocalExtra.lineEndOrEnd

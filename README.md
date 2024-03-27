@@ -3,13 +3,15 @@
 To check this, it generates tests from these code snippets
 (If you know [`elm-verify-examples`](https://github.com/stoeffel/elm-verify-examples), you also know how this works. This rule has only a few extras like checking for types or actually getting errors for invalid syntax.)
 ```elm
+module Dict.Extra exposing (keySet)
+
 {-| `Dict.keys` but returning a `Set` instead of a `List`.
 
     import Dict
     import Set
 
     Dict.fromList [ ( 0, "A" ), ( 1, "B" ), ( 2, "C" ) ]
-        |> keySet
+        |> Dict.Extra.keySet
     --> Set.fromList [ 0, 1, 2 ]
 
 -}

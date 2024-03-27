@@ -12,7 +12,8 @@ type alias Parser a =
 
 
 type alias CodeBlock =
-    { language : Maybe String
+    { startRow : Int
+    , language : Maybe String
     , body : String
     }
 
@@ -38,14 +39,17 @@ type alias FenceCharacterConfig =
 
 parser : Parser CodeBlock
 parser =
-    openingFence
-        |> Parser.Advanced.andThen
-            (\fence ->
-                Parser.Advanced.succeed (\language body -> { language = language, body = body })
-                    |= infoString fence.character
-                    |. Parser.LocalExtra.lineEndOrEnd
-                    |= remainingBlock fence
-            )
+    Parser.Advanced.succeed (\startRow code -> { startRow = startRow, language = code.language, body = code.body })
+        |= Parser.Advanced.getRow
+        |= (openingFence
+                |> Parser.Advanced.andThen
+                    (\fence ->
+                        Parser.Advanced.succeed (\language body -> { language = language, body = body })
+                            |= infoString fence.character
+                            |. Parser.LocalExtra.lineEndOrEnd
+                            |= remainingBlock fence
+                    )
+           )
 
 
 fenceOfAtLeast : Int -> FenceCharacterConfig -> Parser ( FenceCharacterConfig, Int )

@@ -7,6 +7,7 @@ import Elm.Syntax.Node exposing (Node(..))
 import FastDict exposing (Dict)
 import List.LocalExtra
 import Set exposing (Set)
+import Set.LocalExtra
 
 
 type alias Imports =
@@ -186,9 +187,9 @@ importContext moduleExposes import_ =
                     Elm.Syntax.Exposing.All _ ->
                         [ moduleExposes.exposedValueAndFunctionAndTypeAliasNames
                         , moduleExposes |> .exposedChoiceTypesExposingVariants |> FastDict.keys |> Set.fromList
-                        , moduleExposes |> .exposedChoiceTypesExposingVariants |> FastDict.values |> List.LocalExtra.setUnionMap identity
+                        , moduleExposes |> .exposedChoiceTypesExposingVariants |> FastDict.values |> Set.LocalExtra.unionFromList
                         ]
-                            |> List.LocalExtra.setUnionMap identity
+                            |> Set.LocalExtra.unionFromList
 
                     Elm.Syntax.Exposing.Explicit exposes ->
                         exposes

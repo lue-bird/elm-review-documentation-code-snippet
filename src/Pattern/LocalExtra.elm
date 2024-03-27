@@ -1,10 +1,10 @@
-module Pattern.LocalExtra exposing (nodeReferences, references, referencesAlter)
+module Pattern.LocalExtra exposing (nodeReferences, nodeVariables, referencesAlter)
 
 import Elm.Syntax.ModuleName
 import Elm.Syntax.Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern)
-import List.LocalExtra
 import Set exposing (Set)
+import Set.LocalExtra
 
 
 referencesAlter :
@@ -91,6 +91,11 @@ map patternChange =
                 Elm.Syntax.Pattern.NamedPattern qualified (arguments |> List.map step)
 
 
+nodeReferences : Node Pattern -> Set ( Elm.Syntax.ModuleName.ModuleName, String )
+nodeReferences =
+    \(Node _ innerPattern) -> innerPattern |> references
+
+
 references : Pattern -> Set ( Elm.Syntax.ModuleName.ModuleName, String )
 references =
     -- IGNORE TCO
@@ -133,17 +138,70 @@ references =
                 Set.union (tail |> nodeReferences) (head |> nodeReferences)
 
             Elm.Syntax.Pattern.TuplePattern parts ->
-                parts |> List.LocalExtra.setUnionMap nodeReferences
+                parts |> Set.LocalExtra.unionFromListMap nodeReferences
 
             Elm.Syntax.Pattern.ListPattern elements ->
-                elements |> List.LocalExtra.setUnionMap nodeReferences
+                elements |> Set.LocalExtra.unionFromListMap nodeReferences
 
             Elm.Syntax.Pattern.NamedPattern fullyQualified arguments ->
                 arguments
-                    |> List.LocalExtra.setUnionMap nodeReferences
+                    |> Set.LocalExtra.unionFromListMap nodeReferences
                     |> Set.insert ( fullyQualified.moduleName, fullyQualified.name )
 
 
-nodeReferences : Node Pattern -> Set ( Elm.Syntax.ModuleName.ModuleName, String )
-nodeReferences =
-    \(Node _ innerPattern) -> innerPattern |> references
+{-| Recursively find all bindings in a pattern.
+-}
+nodeVariables : Node Pattern -> Set String
+nodeVariables =
+    \(Elm.Syntax.Node.Node _ pattern) -> pattern |> variables
+
+
+variables : Pattern -> Set String
+variables =
+    -- IGNORE TCO
+    \pattern ->
+        case pattern of
+            Elm.Syntax.Pattern.VarPattern name ->
+                name |> Set.singleton
+
+            Elm.Syntax.Pattern.AsPattern afterAsPattern (Node _ name) ->
+                Set.insert name (afterAsPattern |> nodeVariables)
+
+            Elm.Syntax.Pattern.ParenthesizedPattern inParens ->
+                inParens |> nodeVariables
+
+            Elm.Syntax.Pattern.ListPattern patterns ->
+                patterns |> Set.LocalExtra.unionFromListMap nodeVariables
+
+            Elm.Syntax.Pattern.TuplePattern patterns ->
+                patterns |> Set.LocalExtra.unionFromListMap nodeVariables
+
+            Elm.Syntax.Pattern.RecordPattern patterns ->
+                patterns |> Set.LocalExtra.fromListMap (\(Elm.Syntax.Node.Node _ name) -> name)
+
+            Elm.Syntax.Pattern.NamedPattern _ patterns ->
+                patterns |> Set.LocalExtra.unionFromListMap nodeVariables
+
+            Elm.Syntax.Pattern.UnConsPattern headPattern tailPattern ->
+                Set.union (tailPattern |> nodeVariables) (headPattern |> nodeVariables)
+
+            Elm.Syntax.Pattern.AllPattern ->
+                Set.empty
+
+            Elm.Syntax.Pattern.UnitPattern ->
+                Set.empty
+
+            Elm.Syntax.Pattern.CharPattern _ ->
+                Set.empty
+
+            Elm.Syntax.Pattern.StringPattern _ ->
+                Set.empty
+
+            Elm.Syntax.Pattern.IntPattern _ ->
+                Set.empty
+
+            Elm.Syntax.Pattern.HexPattern _ ->
+                Set.empty
+
+            Elm.Syntax.Pattern.FloatPattern _ ->
+                Set.empty

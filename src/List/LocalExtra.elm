@@ -1,6 +1,15 @@
-module List.LocalExtra exposing (allJustMap, firstJustMap, last, removeLast, setUnionMap)
+module List.LocalExtra exposing (allJustMap, consJust, firstJustMap, removeLast)
 
-import Set exposing (Set)
+
+consJust : Maybe a -> (List a -> List a)
+consJust newHeadMaybe =
+    \list ->
+        case newHeadMaybe of
+            Nothing ->
+                list
+
+            Just newHead ->
+                newHead :: list
 
 
 removeLast : List a -> List a
@@ -15,31 +24,6 @@ removeLast =
 
             el0 :: el1 :: el2Up ->
                 el0 :: removeLast (el1 :: el2Up)
-
-
-last : List a -> Maybe a
-last =
-    \list ->
-        case list of
-            [] ->
-                Nothing
-
-            [ onlyElement ] ->
-                onlyElement |> Just
-
-            _ :: el1 :: el2Up ->
-                last (el1 :: el2Up)
-
-
-setUnionMap : (a -> Set comparable) -> (List a -> Set comparable)
-setUnionMap elementToSet =
-    \list ->
-        list
-            |> List.foldl
-                (\element soFar ->
-                    Set.union soFar (element |> elementToSet)
-                )
-                Set.empty
 
 
 allJustMap : (a -> Maybe b) -> List a -> Maybe (List b)
