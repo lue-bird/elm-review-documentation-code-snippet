@@ -1479,6 +1479,8 @@ tests =
             (\() ->
                 [ """module A exposing (plus1)
 
+{-| -}
+
 {-| + 1.
 
     () --> ()
@@ -1489,6 +1491,16 @@ tests =
 -}
 plus1 n =
     n + 1
+
+{-| + 2.
+
+    () --> ()
+
+    ()
+    --> ()
+-}
+plus2 n =
+    n + 2
 """
                 , """module DocumentationCodeSnippetTest exposing (tests)
 
@@ -1526,6 +1538,14 @@ tests =
             "A"
             [ Test.describe
                 "plus1"
+                [ Test.describe
+                    "code snippet 0"
+                    [ Test.test "0" (\\() -> (()) |> Expect.equal ())
+                    , Test.test "1" (\\() -> (()) |> Expect.equal ())
+                    ]
+                ]
+            , Test.describe
+                "plus2"
                 [ Test.describe
                     "code snippet 0"
                     [ Test.test "0" (\\() -> (()) |> Expect.equal ())
