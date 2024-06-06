@@ -3,7 +3,7 @@
     "name": "lue-bird/elm-review-documentation-code-snippet",
     "summary": "verify code examples by generating tests",
     "license": "MIT",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "exposed-modules": [
         "Review.Documentation.CodeSnippet"
     ],
