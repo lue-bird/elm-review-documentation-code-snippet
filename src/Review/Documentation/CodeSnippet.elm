@@ -1300,7 +1300,7 @@ codeSnippetExpectationCheckToExpectationCode =
     \codeSnippetCheck ->
         case codeSnippetCheck.expectation of
             Equals expectedExpression ->
-                Elm.CodeGen.pipe (codeSnippetCheck.checkedExpression |> Elm.CodeGen.parens)
+                Elm.CodeGen.pipe codeSnippetCheck.checkedExpression
                     [ Elm.CodeGen.fqConstruct [ "Expect" ] "equal" [ expectedExpression ] ]
 
             IsOfType expectedType ->
