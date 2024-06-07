@@ -108,7 +108,7 @@ type ExposingKind
 toMarked : String -> (String -> Maybe String)
 toMarked mark =
     \string ->
-        case string |> String.split "\n" |> List.LocalExtra.allJustMap (stringToWithoutStart mark) of
+        case string |> String.lines |> List.LocalExtra.allJustMap (stringToWithoutStart mark) of
             Just linesWithoutStart ->
                 linesWithoutStart |> String.join "\n" |> Just
 
@@ -380,7 +380,7 @@ checkWith implicitImportCurrentModuleExposing =
                                 |> List.concatMap (\dependencyDocs -> dependencyDocs |> Review.Project.Dependency.modules)
                                 |> List.map
                                     (\moduleDocs ->
-                                        ( moduleDocs.name |> String.split "."
+                                        ( moduleDocs.name |> String.lines
                                         , { exposedChoiceTypesExposingVariants =
                                                 moduleDocs
                                                     |> .unions
@@ -1773,12 +1773,12 @@ elmCodeBlockSplitOffChecks =
                                 -- all next lines build one marked
                                 Just marked ->
                                     [ realChunk0
-                                    , marked |> String.split "\n" |> List.map (\line -> mark ++ line) |> String.join "\n"
+                                    , marked |> String.lines |> List.map (\line -> mark ++ line) |> String.join "\n"
                                     ]
 
                                 -- multiple crammed together without blank lines between
                                 Nothing ->
-                                    case chunk0AfterReal0 |> String.split "\n" of
+                                    case chunk0AfterReal0 |> String.lines of
                                         -- String.split never returns []
                                         [] ->
                                             [ realChunk0, mark ++ ((chunk0AfterReal0 :: chunk1AfterReal0 :: chunk2AfterReal0Up) |> String.join mark) ]
@@ -1814,7 +1814,7 @@ codeBlockToChunks : String -> List String
 codeBlockToChunks =
     \codeBlock ->
         codeBlock
-            |> String.split "\n"
+            |> String.lines
             |> List.foldl
                 (\line soFar ->
                     case line |> String.uncons of

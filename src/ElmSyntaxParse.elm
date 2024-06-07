@@ -51,7 +51,7 @@ expression =
             moduleSourceCode =
                 "module A exposing (..)\na =\n"
                     ++ (rawSourceCode
-                            |> String.split "\n"
+                            |> String.lines
                             |> List.map (\line -> "    " ++ line)
                             |> String.join "\n"
                        )
@@ -77,7 +77,7 @@ type_ =
             moduleSourceCode =
                 "module A exposing (..)\nport a :\n"
                     ++ (rawSourceCode
-                            |> String.split "\n"
+                            |> String.lines
                             |> List.map (\line -> "    " ++ line)
                             |> String.join "\n"
                        )

@@ -1,3 +1,6 @@
+#### 1.1.2
+  - parse line ends other than LF correctly (https://github.com/lue-bird/elm-review-documentation-code-snippet/issues/3)
+
 #### 1.1.1
   - avoid unnecessary parens in expectation to fix elm-review trying to edit code again after elm-format has run (https://github.com/lue-bird/elm-review-documentation-code-snippet/issues/4)
 
