@@ -20,7 +20,7 @@ keySet = ...
 which will generate a test with
 ```elm
 Dict.fromList [ ( 0, "A" ), ( 1, "B" ), ( 2, "C" ) ]
-    |> keySet
+    |> Dict.Extra.keySet
     |> Expect.equal (Set.fromList [ 0, 1, 2 ])
 ```
 
