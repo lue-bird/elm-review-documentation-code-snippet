@@ -1,3 +1,6 @@
+#### 1.1.3
+  - upgrade elm-syntax-dsl to >= 6.0.3 to [fix how print characters and carriage return are formatted](https://github.com/the-sett/elm-syntax-dsl/issues/50)
+
 #### 1.1.2
   - parse line ends other than LF correctly (https://github.com/lue-bird/elm-review-documentation-code-snippet/issues/3)
 
