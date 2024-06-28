@@ -1,4 +1,4 @@
-[🔧 `Review.Documentation.CodeSnippet.check`](https://package.elm-lang.org/packages/lue-bird/elm-review-documentation-example/1.0.0/Review-Documentation-CodeSnippet#check "provides fixes") checks your small code examples in the readme, module headers and declaration comments for valid syntax, matching types and correctness.
+[🔧 `Review.Documentation.CodeSnippet.check`](https://package.elm-lang.org/packages/lue-bird/elm-review-documentation-example/1.1.3/Review-Documentation-CodeSnippet#check "provides fixes") checks your small code examples in the readme, module headers and declaration comments for valid syntax, matching types and correctness.
 
 To check this, it generates tests from these code snippets
 (If you know [`elm-verify-examples`](https://github.com/stoeffel/elm-verify-examples), you also know how this works. This rule has only a few extras like checking for types or actually getting errors for invalid syntax.)

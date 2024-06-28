@@ -3,7 +3,7 @@
     "name": "lue-bird/elm-review-documentation-code-snippet",
     "summary": "verify code examples by generating tests",
     "license": "MIT",
-    "version": "1.1.2",
+    "version": "1.1.3",
     "exposed-modules": [
         "Review.Documentation.CodeSnippet"
     ],
@@ -19,7 +19,6 @@
         "the-sett/elm-syntax-dsl": "6.0.3 <= v < 7.0.0"
     },
     "test-dependencies": {
-        "elm-explorations/test": "2.0.1 <= v < 3.0.0",
-        "the-sett/elm-pretty-printer": "3.1.0 <= v < 4.0.0"
+        "elm-explorations/test": "2.0.1 <= v < 3.0.0"
     }
 }
